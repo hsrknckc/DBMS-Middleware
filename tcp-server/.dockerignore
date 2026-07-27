@@ -1,0 +1,13 @@
+# Derleme ciktilari imaja kopyalanmaz; imaj kendi icinde derler.
+out/
+sources.txt
+*.class
+
+# Editor / isletim sistemi artiklari
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Belgeler imaj boyutunu buyutur, calismaya katkisi yoktur
+README.md

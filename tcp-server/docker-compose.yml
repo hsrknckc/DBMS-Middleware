@@ -1,0 +1,55 @@
+# =============================================================
+#  DBMS Ara Katman - gelistirme ortami
+#
+#  Tek komutla ayaga kaldirir:  docker compose up -d
+#  Durdurur:                    docker compose down
+#  Verilerle birlikte siler:    docker compose down -v   (DIKKAT: veri gider)
+#
+#  Iki servis vardir:
+#    mongo      -> MongoDB veritabani (veriler kalici volume'de)
+#    middleware -> senin TCP sunucun (Dockerfile'dan derlenir)
+# =============================================================
+
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: dbms-mongo
+    restart: unless-stopped
+    ports:
+      # Sol taraf senin bilgisayarindaki port: MongoDB Compass ile
+      # localhost:27017 adresinden baglanip veriyi gozle gorebilirsin.
+      - "27017:27017"
+    volumes:
+      # KALICILIK: veriler konteynerin icinde degil, adlandirilmis bir
+      # volume'de tutulur. Konteyner silinse bile veri kaybolmaz.
+      - mongo-data:/data/db
+    healthcheck:
+      # MongoDB gercekten hazir mi diye kontrol eder. Ara katman ancak
+      # bu kontrol basarili olduktan sonra baslar (asagidaki depends_on).
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  middleware:
+    build: .                      # ayni klasordeki Dockerfile'i kullan
+    container_name: dbms-middleware
+    restart: unless-stopped
+    ports:
+      # Frontend ve backend bu porta baglanir.
+      - "5150:5150"
+    environment:
+      PORT: "5150"
+      # MongoDB adresi. DIKKAT: burada "localhost" DEGIL "mongo" yazar.
+      # Docker agi icinde her servis kendi adiyla bulunur; "localhost"
+      # konteynerin kendisi anlamina gelirdi.
+      MONGO_URI: "mongodb://mongo:27017"
+      MONGO_DB: "dbms"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

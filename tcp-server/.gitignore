@@ -1,0 +1,15 @@
+# Derleme ciktilari - depoda tutulmaz, herkes kendi derler
+out/
+sources.txt
+*.class
+
+# GUVENLIK: sunucu anahtarlari ASLA depoya girmemeli
+*.pem
+*.key
+
+# Editor / isletim sistemi artiklari
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+kaynaklar.txt

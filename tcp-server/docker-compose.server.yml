@@ -1,0 +1,76 @@
+# =============================================================
+#  DBMS Ara Katman - ORTAK SUNUCU (AWS EC2) yapilandirmasi
+#
+#  Kullanim (sunucu uzerinde):
+#    docker compose -f docker-compose.server.yml up -d --build
+#    docker compose -f docker-compose.server.yml logs -f middleware
+#    docker compose -f docker-compose.server.yml down
+#
+#  Yerel gelistirme icin docker-compose.yml kullanilir; bu dosya ondan
+#  UC noktada ayrilir:
+#    1) MongoDB portu DISARIYA ACILMAZ (sadece docker agi icinden erisilir)
+#    2) Bellek sinirlari vardir (kucuk EC2 makinelerinde takilmamak icin)
+#    3) Sunucu yeniden baslayinca servisler otomatik ayaga kalkar
+# =============================================================
+
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: dbms-mongo
+    restart: always
+    # DIKKAT: "ports" bolumu BILEREK YOKTUR.
+    # MongoDB'ye yalnizca ayni docker agindaki middleware erisir.
+    # Internete acik bir MongoDB portu, taramalardan dakikalar icinde
+    # bulunur ve makinenin ele gecirilmesine yol acar.
+    # Veriye disaridan bakmak gerekirse SSH tuneli kullanin (README).
+    expose:
+      - "27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      # Loglar diski doldurmasin diye donguselleştirilir.
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  middleware:
+    build: .
+    container_name: dbms-middleware
+    restart: always
+    ports:
+      # Ekip bu porta baglanir. Kimlerin erisebilecegi AWS Security Group
+      # ile sinirlanir (bkz. README - dagitim adimlari).
+      - "5150:5150"
+    environment:
+      PORT: "5150"
+      MONGO_URI: "mongodb://mongo:27017"
+      MONGO_DB: "dbms"
+      # Kucuk makinelerde JVM'in tum bellegi yemesini engeller.
+      JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8 -Xmx256m"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mongo-data:
