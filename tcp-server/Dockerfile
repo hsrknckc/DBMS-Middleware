@@ -19,7 +19,7 @@ COPY src/ src/
 # Tum .java dosyalarini bulup tek seferde derle.
 # -encoding UTF-8: kaynak dosyalardaki Turkce yorumlar bozulmasin.
 RUN find src -name "*.java" > sources.txt && \
-    javac -encoding UTF-8 -cp lib/json-parser.jar -d out @sources.txt
+    javac -encoding UTF-8 -cp "lib/*" -d out @sources.txt
 
 # ---------- 2. ASAMA: CALISTIRMA ----------
 FROM eclipse-temurin:21-jre
@@ -40,4 +40,4 @@ EXPOSE 5150
 # UTF-8 ciktisi: konteyner loglarinda Turkce karakterler bozulmasin.
 ENV JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8"
 
-CMD ["java", "-cp", "out:lib/json-parser.jar", "middleware.Main"]
+CMD ["java", "-cp", "out:lib/*", "middleware.Main"]

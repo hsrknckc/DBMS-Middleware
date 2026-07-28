@@ -72,7 +72,7 @@ Tam sozlesme ve ornekler: **PROTOKOL.md**
 
 ---
 
-## Yetkiler (Ister_0013, Ister_0015)
+## Yetkiler 
 
 Yetki isimleri On Yuz'un Permission listesiyle birebir aynidir:
 
@@ -100,14 +100,19 @@ ekip icinden edinilir.
 | **BAGLANTI-REHBERI.md** | Ekip arkadaslari — adim adim baglanma |
 | **DOCKER.md** | Docker kullanimi |
 | **DEPLOY.md** | AWS sunucu kurulumu |
+| **MONGODB.md** | MongoDB kurulumu ve dogrulama |
 
 ---
 
-## MongoDB notu
+## MongoDB
 
-Veriler su an bellekte (`DataStore`) tutulur; sunucu yeniden baslayinca
-sifirlanir. Ister_0016/0017 icin `DataStore`'un yerini gercek MongoDB
-alacak; protokol ve yetki katmanina dokunulmayacak.
+Veri katmani `Store` arayuzu arkasindadir; iki uygulamasi vardir:
+`InMemoryStore` (bellekte, gecici) ve `MongoStore` (gercek MongoDB).
+Secimi `MONGO_URI` ortam degiskeni belirler; tanimli degilse bellek
+deposu kullanilir.
+
+Surucu jar'larinin indirilmesi, yerel deneme ve kalicilik dogrulamasi
+icin: **MONGODB.md**
 
 ---
 
@@ -127,7 +132,9 @@ alacak; protokol ve yetki katmanina dokunulmayacak.
       events/                -> Observer deseni (Event, Observer, EventBus,
                                 ConsoleLogObserver)
       server/                -> TcpServer, ClientHandler, ClientSession
-      storage/DataStore.java -> gecici bellek ici veritabani
+      storage/Store.java          -> veri deposu arayuzu
+      storage/InMemoryStore.java  -> bellekte (gecici)
+      storage/MongoStore.java     -> gercek MongoDB
 
     lib/json-parser.jar      -> ayri projeden gelen JSON kutuphanesi
     Dockerfile  docker-compose.yml  docker-compose.server.yml

@@ -11,19 +11,37 @@ import middleware.auth.User;
 import middleware.events.Event;
 import middleware.events.EventBus;
 import middleware.server.ClientSession;
-import middleware.storage.DataStore;
+import middleware.storage.Store;
 
+/**
+ * TEK PROTOKOL - PROTOKOL.md sozlesmesi.
+ *
+ * On Yuz ve Arka Yuz ayni protokolu konusur; ayri router yoktur.
+ *
+ * ISTEK:
+ *   {"requestId":"..","action":"..","username":"..","password":"..",
+ *    "database":"..","collection":"..","filter":{..},"document":{..}}
+ *
+ * CEVAP:
+ *   {"requestId":"..","status":"OK|UNAUTHORIZED|ERROR","message":"..","data":[..]}
+ *
+ * "data" HER ZAMAN bir dizidir (bos olabilir). Tek nesne donen islemlerde
+ * dizi tek elemanlidir; istemci data[0] okur.
+ *
+ * Kimlik dogrulama her istekte username+password ile yapilir (token yoktur).
+ * Yetki kontrolu (Ister_0013, Ister_0015) action bazinda asagida eslenmistir.
+ */
 public class Router {
 
     /** Veritabani ust verisinin tutuldugu ayrilmis alan. */
     private static final String META_DB = "__meta__";
     private static final String META_DATABASES = META_DB + "/databases";
 
-    private final DataStore store;
+    private final Store store;
     private final EventBus eventBus;
     private final AuthService auth;
 
-    public Router(DataStore store, EventBus eventBus, AuthService auth) {
+    public Router(Store store, EventBus eventBus, AuthService auth) {
         this.store = store;
         this.eventBus = eventBus;
         this.auth = auth;
@@ -106,14 +124,19 @@ public class Router {
 
     /** Ister_0018: veritabani erisilebilir mi. */
     private String ping(String rid) {
-        return ok(rid, "Database is active", List.of());
+        // Ister_0018: veritabani sunucusunun aktifligini kontrol eder.
+        // Bellek deposunda her zaman true; MongoDB'de gercek ping atilir.
+        if (store.isHealthy()) {
+            return ok(rid, "Database is active", List.of());
+        }
+        return error(rid, "Database is not reachable");
     }
 
     /** Ister_0016: filtreye uyan kayitlari doner. */
     private String read(String rid, User user, Map<String, Object> req) {
         require(user, "dataView");
         String col = target(req);
-        List<Map<String, Object>> records = store.find(col, mapOrNull(req.get("filter")));
+        List<Map<String, Object>> records = store.find(col, normalizeFilter(req.get("filter")));
         return ok(rid, records.size() + " record(s) found", records);
     }
 
@@ -136,7 +159,7 @@ public class Router {
         Map<String, Object> doc = mapOrNull(req.get("document"));
         if (doc == null) throw new Invalid("document field must be an object");
 
-        List<Map<String, Object>> matched = store.find(col, mapOrNull(req.get("filter")));
+        List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
         List<Map<String, Object>> updated = new ArrayList<>();
         for (Map<String, Object> rec : matched) {
             Object id = rec.get("id");
@@ -155,7 +178,7 @@ public class Router {
     private String delete(String rid, User user, Map<String, Object> req) {
         require(user, "dataDelete");
         String col = target(req);
-        List<Map<String, Object>> matched = store.find(col, mapOrNull(req.get("filter")));
+        List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
         int count = 0;
         for (Map<String, Object> rec : matched) {
             Object id = rec.get("id");
@@ -164,7 +187,10 @@ public class Router {
                 count++;
             }
         }
-        return ok(rid, count + " record(s) deleted", List.of());
+        // Silinen sayi data icinde de dondurulur; istemci mesaj metnini
+        // ayristirmadan sonucu dogrulayabilsin diye.
+        return ok(rid, count + " record(s) deleted",
+                  List.of(Map.of("deletedCount", (long) count)));
     }
 
     /**
@@ -341,7 +367,7 @@ public class Router {
         boolean created = store.createCollection(db, col);
         if (!created) throw new Invalid("Collection already exists: " + col);
 
-        eventBus.publish(new Event("insert", DataStore.key(db, col), Map.of("collection", col)));
+        eventBus.publish(new Event("insert", Store.key(db, col), Map.of("collection", col)));
         Map<String, Object> info = new LinkedHashMap<>();
         info.put("database", db);
         info.put("collection", col);
@@ -358,7 +384,7 @@ public class Router {
         boolean dropped = store.dropCollection(db, col);
         if (!dropped) throw new Invalid("Collection not found: " + col);
 
-        eventBus.publish(new Event("delete", DataStore.key(db, col), Map.of("collection", col)));
+        eventBus.publish(new Event("delete", Store.key(db, col), Map.of("collection", col)));
         return ok(rid, "Collection dropped: " + col, List.of());
     }
 
@@ -439,7 +465,7 @@ public class Router {
     private static String target(Map<String, Object> req) {
         String col = str(req, "collection");
         if (col == null) throw new Invalid("collection field is required");
-        return DataStore.key(str(req, "database"), col);
+        return Store.key(str(req, "database"), col);
     }
 
     private static String databaseName(Map<String, Object> req) {
@@ -480,7 +506,7 @@ public class Router {
         long records = 0;
         Map<String, Object> info = store.collectionInfo();
         for (String c : cols) {
-            Object n = info.get(DataStore.key(name, c));
+            Object n = info.get(Store.key(name, c));
             if (n instanceof Number num) records += num.longValue();
         }
         Map<String, Object> out = new LinkedHashMap<>(meta);
@@ -501,6 +527,26 @@ public class Router {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> mapOrNull(Object o) {
         return (o instanceof Map) ? (Map<String, Object>) o : null;
+    }
+
+    /**
+     * Filtreyi normallestirir.
+     *
+     * Kayitlarimizda "_id" alani ASLA bulunmaz (MongoDB'nin ObjectId'si
+     * disarı verilmez, kendi "id" alanimiz kullanilir). Bu yuzden "_id"
+     * iceren bir filtre hicbir kaydi bulamaz. MongoDB alistigi icin "_id"
+     * gonderen istemcileri desteklemek adina bunu "id" olarak yorumluyoruz.
+     *
+     * Ornek: {"id":"rec-8","_id":"rec-8"} -> {"id":"rec-8"}
+     */
+    private static Map<String, Object> normalizeFilter(Object raw) {
+        Map<String, Object> filter = mapOrNull(raw);
+        if (filter == null || !filter.containsKey("_id")) return filter;
+
+        Map<String, Object> normalized = new LinkedHashMap<>(filter);
+        Object underscoreId = normalized.remove("_id");
+        normalized.putIfAbsent("id", underscoreId);
+        return normalized;
     }
 
     @SuppressWarnings("unchecked")

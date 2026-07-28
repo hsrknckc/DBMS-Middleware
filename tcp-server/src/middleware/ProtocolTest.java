@@ -112,6 +112,29 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"sinif\":5}}");
             check("DELETE removes 1 record", del.contains("1 record(s) deleted"));
 
+            section("Filter tolerance (_id alias) and delete count");
+            rpc(out, in, "{\"requestId\":\"13a\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Silinecek\"}}");
+            String toDelete = rpc(out, in, "{\"requestId\":\"13b\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"ad\":\"Silinecek\"}}");
+            String delId = extract(toDelete, "id");
+
+            // Istemci MongoDB alistigi icin hem id hem _id gonderebilir;
+            // _id kayitlarda bulunmadigi icin eskiden hicbir sey silinmezdi.
+            String delBoth = rpc(out, in, "{\"requestId\":\"13c\",\"action\":\"DELETE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\","
+                    + "\"filter\":{\"id\":\"" + delId + "\",\"_id\":\"" + delId + "\"}}");
+            check("filter with both id and _id deletes the record", delBoth.contains("1 record(s) deleted"));
+            check("DELETE reports deletedCount", delBoth.contains("\"deletedCount\":1"));
+
+            String delNone = rpc(out, in, "{\"requestId\":\"13d\",\"action\":\"DELETE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"id\":\"yok\"}}");
+            check("no match reports deletedCount 0", delNone.contains("\"deletedCount\":0"));
+
+            String readAlias = rpc(out, in, "{\"requestId\":\"13e\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"_id\":\"" + delId + "\"}}");
+            check("_id filter finds nothing after delete", readAlias.contains("0 record(s) found"));
+
             section("LIST_DATABASES and LIST_DATABASES_INFO");
             String ld = rpc(out, in, "{\"requestId\":\"17\",\"action\":\"LIST_DATABASES\"," + admin() + "}");
             check("LIST_DATABASES contains okul", ld.contains("okul"));
@@ -223,6 +246,14 @@ public class ProtocolTest {
 
     static void section(String title) {
         System.out.println("--- " + title + " ---");
+    }
+
+    /** Cevaptan bir alanin ilk degerini cikarir (basit metin arama). */
+    static String extract(String json, String key) {
+        int i = json.indexOf("\"" + key + "\":\"");
+        if (i < 0) return null;
+        int start = i + key.length() + 4;
+        return json.substring(start, json.indexOf('"', start));
     }
 
     static void check(String name, boolean cond) {

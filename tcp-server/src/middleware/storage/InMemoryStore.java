@@ -9,7 +9,16 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
-public class DataStore {
+/**
+ * Bellek ici (in-memory) veri deposu.
+ *
+ * MongoDB yokken kullanilir. Veriler surec belleginde durur; sunucu
+ * yeniden baslayinca SIFIRLANIR.
+ *
+ * Thread guvenligi: sunucu her istemciyi ayri thread'de calistirdigi icin
+ * ConcurrentHashMap + synchronized bloklar kullanilir.
+ */
+public class InMemoryStore implements Store {
 
     private final Map<String, List<Map<String, Object>>> collections = new ConcurrentHashMap<>();
     private final AtomicLong idCounter = new AtomicLong(1);
@@ -18,6 +27,7 @@ public class DataStore {
         return LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
     }
 
+    @Override
     public Map<String, Object> insert(String collection, Map<String, Object> data) {
         String id = "rec-" + idCounter.getAndIncrement();
         Map<String, Object> record = new LinkedHashMap<>(data);
@@ -34,6 +44,7 @@ public class DataStore {
         return new LinkedHashMap<>(record);
     }
 
+    @Override
     public List<String> insertMany(String collection, List<Map<String, Object>> records) {
         List<String> ids = new ArrayList<>();
         for (Map<String, Object> data : records) {
@@ -42,6 +53,7 @@ public class DataStore {
         return ids;
     }
 
+    @Override
     public List<Map<String, Object>> find(String collection, Map<String, Object> filter) {
         List<Map<String, Object>> list = collections.get(collection);
         List<Map<String, Object>> result = new ArrayList<>();
@@ -57,6 +69,7 @@ public class DataStore {
         return result;
     }
 
+    @Override
     public Map<String, Object> updateById(String collection, String id, Map<String, Object> data) {
         List<Map<String, Object>> list = collections.get(collection);
         if (list == null) return null;
@@ -73,6 +86,7 @@ public class DataStore {
         return null;
     }
 
+    @Override
     public boolean deleteById(String collection, String id) {
         List<Map<String, Object>> list = collections.get(collection);
         if (list == null) return false;
@@ -88,19 +102,22 @@ public class DataStore {
     // ============================================================
 
     /** Bos koleksiyon olusturur. Zaten varsa false doner. */
+    @Override
     public boolean createCollection(String database, String collection) {
-        String key = key(database, collection);
+        String key = Store.key(database, collection);
         if (collections.containsKey(key)) return false;
         collections.put(key, new ArrayList<>());
         return true;
     }
 
     /** Koleksiyonu ve icindeki tum kayitlari siler. */
+    @Override
     public boolean dropCollection(String database, String collection) {
-        return collections.remove(key(database, collection)) != null;
+        return collections.remove(Store.key(database, collection)) != null;
     }
 
     /** Bir veritabanindaki koleksiyon adlarini doner (veritabani oneki ayiklanmis). */
+    @Override
     public List<String> listCollections(String database) {
         String prefix = database + "/";
         List<String> result = new ArrayList<>();
@@ -114,6 +131,7 @@ public class DataStore {
     }
 
     /** Kayit tasiyan ya da olusturulmus tum veritabani adlarini doner. */
+    @Override
     public List<String> listDatabases() {
         java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
         for (String key : collections.keySet()) {
@@ -126,6 +144,7 @@ public class DataStore {
     }
 
     /** Veritabanini ve altindaki TUM koleksiyonlari siler. Silinen koleksiyon sayisini doner. */
+    @Override
     public int dropDatabase(String database) {
         String prefix = database + "/";
         int count = 0;
@@ -138,11 +157,12 @@ public class DataStore {
         return count;
     }
 
-    /** "db/col" anahtari uretir; database bos ise koleksiyon adi tek basina kullanilir. */
-    public static String key(String database, String collection) {
-        return (database == null || database.isBlank()) ? collection : database + "/" + collection;
+    @Override
+    public boolean isHealthy() {
+        return true; // bellek her zaman erisilebilir
     }
 
+    @Override
     public Map<String, Object> collectionInfo() {
         Map<String, Object> info = new LinkedHashMap<>();
         for (Map.Entry<String, List<Map<String, Object>>> e : collections.entrySet()) {
@@ -162,6 +182,7 @@ public class DataStore {
         return true;
     }
 
+    @Override
     public void loadSampleData() {
         Map<String, Object> u1 = new LinkedHashMap<>();
         u1.put("name", "Mehmet Kaya");
