@@ -81,6 +81,68 @@ public class DataStore {
         }
     }
 
+
+    // ============================================================
+    //  KOLEKSIYON VE VERITABANI YONETIMI
+    //  Anahtar bicimi: "veritabani/koleksiyon"
+    // ============================================================
+
+    /** Bos koleksiyon olusturur. Zaten varsa false doner. */
+    public boolean createCollection(String database, String collection) {
+        String key = key(database, collection);
+        if (collections.containsKey(key)) return false;
+        collections.put(key, new ArrayList<>());
+        return true;
+    }
+
+    /** Koleksiyonu ve icindeki tum kayitlari siler. */
+    public boolean dropCollection(String database, String collection) {
+        return collections.remove(key(database, collection)) != null;
+    }
+
+    /** Bir veritabanindaki koleksiyon adlarini doner (veritabani oneki ayiklanmis). */
+    public List<String> listCollections(String database) {
+        String prefix = database + "/";
+        List<String> result = new ArrayList<>();
+        for (String key : collections.keySet()) {
+            if (key.startsWith(prefix)) {
+                result.add(key.substring(prefix.length()));
+            }
+        }
+        java.util.Collections.sort(result);
+        return result;
+    }
+
+    /** Kayit tasiyan ya da olusturulmus tum veritabani adlarini doner. */
+    public List<String> listDatabases() {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        for (String key : collections.keySet()) {
+            int slash = key.indexOf('/');
+            if (slash > 0) names.add(key.substring(0, slash));
+        }
+        List<String> result = new ArrayList<>(names);
+        java.util.Collections.sort(result);
+        return result;
+    }
+
+    /** Veritabanini ve altindaki TUM koleksiyonlari siler. Silinen koleksiyon sayisini doner. */
+    public int dropDatabase(String database) {
+        String prefix = database + "/";
+        int count = 0;
+        for (String key : new ArrayList<>(collections.keySet())) {
+            if (key.startsWith(prefix)) {
+                collections.remove(key);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** "db/col" anahtari uretir; database bos ise koleksiyon adi tek basina kullanilir. */
+    public static String key(String database, String collection) {
+        return (database == null || database.isBlank()) ? collection : database + "/" + collection;
+    }
+
     public Map<String, Object> collectionInfo() {
         Map<String, Object> info = new LinkedHashMap<>();
         for (Map.Entry<String, List<Map<String, Object>>> e : collections.entrySet()) {
@@ -105,12 +167,12 @@ public class DataStore {
         u1.put("name", "Mehmet Kaya");
         u1.put("email", "mehmet.kaya@company.com");
         u1.put("department", "Sensor");
-        insert("users", u1);
+        insert("demo/users", u1);
 
         Map<String, Object> u2 = new LinkedHashMap<>();
         u2.put("name", "Zeynep Demir");
         u2.put("email", "zeynep.demir@company.com");
         u2.put("department", "Acoustic");
-        insert("users", u2);
+        insert("demo/users", u2);
     }
 }

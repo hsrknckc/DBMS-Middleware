@@ -9,17 +9,17 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 import middleware.events.EventBus;
-import middleware.protocol.ProtocolDispatcher;
+import middleware.protocol.Router;
 
 public class ClientHandler implements Runnable {
 
     private final Socket socket;
-    private final ProtocolDispatcher dispatcher;
+    private final Router router;
     private final EventBus eventBus;
 
-    public ClientHandler(Socket socket, ProtocolDispatcher dispatcher, EventBus eventBus) {
+    public ClientHandler(Socket socket, Router router, EventBus eventBus) {
         this.socket = socket;
-        this.dispatcher = dispatcher;
+        this.router = router;
         this.eventBus = eventBus;
     }
 
@@ -45,7 +45,7 @@ public class ClientHandler implements Runnable {
                 if (line.isEmpty()) continue;
 
                 System.out.println("[>] " + clientInfo + " request : " + line);
-                String response = dispatcher.handle(line, session);
+                String response = router.handle(line, session);
                 System.out.println("[<] " + clientInfo + " response : " + response);
 
                 session.send(response);

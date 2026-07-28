@@ -1,135 +1,133 @@
-# DBMS Ara Katman - TCP Sunucusu (Cift Protokol: On Yuz + Arka Yuz)
+# DBMS Ara Katman - TCP Sunucusu
 
-Frontend (Flutter) ile veritabanı arasındaki iletişim katmanı.
-JSON işleme, AYRI PROJE olan json-parser'dan jar olarak alınır.
+On Yuz (Flutter) ve Arka Yuz (Java kutuphanesi) ile veritabani arasindaki
+iletisim katmani. JSON isleme, ayri proje olan **json-parser**'dan jar
+olarak alinir.
 
-
-## Ortak sunucu (AWS)
-
-Ekip icin ortak gelistirme sunucusu kurulumu ayri bir belgede adim adim
-anlatilmistir: **DEPLOY.md**. Sunucuda `docker-compose.server.yml` kullanilir
-(MongoDB portu disariya acilmaz, bellek sinirlari vardir).
-
-## Docker ile calistirma (yerel, onerilen)
-
-Java kurmaya gerek yoktur; Docker her seyi kendi icinde halleder.
-Sunucu + MongoDB tek komutla ayaga kalkar:
-
-    docker compose up -d --build      # ilk sefer (imaji derler)
-    docker compose up -d              # sonraki seferler
-    docker compose logs -f middleware # sunucu loglarini izle
-    docker compose ps                 # servisler ayakta mi
-    docker compose down               # durdur (veriler KORUNUR)
-    docker compose down -v            # durdur ve verileri de sil
-
-Ayaga kalkinca:
-  - Ara katman  -> localhost:5150  (frontend ve backend buraya baglanir)
-  - MongoDB     -> localhost:27017 (MongoDB Compass ile bakilabilir)
-
-Testleri konteyner icinde calistirmak icin:
-
-    docker compose exec middleware java -cp out:lib/json-parser.jar middleware.AuthProtocolTest localhost 5150
-    docker compose exec middleware java -cp out:lib/json-parser.jar middleware.BackendProtocolTest localhost 5150
-
-### Onemli notlar
-
-- Kod degistiginde imaji yeniden derlemek gerekir: `docker compose up -d --build`
-- MongoDB verileri `mongo-data` adli kalici volume'de tutulur; `docker compose down`
-  veriyi SILMEZ, `down -v` siler.
-- Konteyner icinden MongoDB adresi `mongodb://mongo:27017`'dir (localhost DEGIL).
-  Docker agi icinde her servis kendi adiyla bulunur.
-- Port disaridan degistirilebilir: `PORT=6000 docker compose up -d`
-  (compose dosyasindaki ports esleсmesini de guncellemeyi unutma.)
-
-## Derleme ve calistirma (Docker olmadan, dogrudan Java ile)
-
-    javac -cp lib/json-parser.jar -d out $(find src -name "*.java")   # Linux/Mac
-    # Windows PowerShell:
-    # javac -cp lib\json-parser.jar -d out (Get-ChildItem -Recurse src -Filter *.java).FullName
-
-    # Terminal 1 - sunucu:
-    java -cp "out:lib/json-parser.jar" middleware.Main          # varsayilan port 5150
-    # Windows: : yerine ;
-
-    # Terminal 2 - On Yuz protokol + yetki testi (24 test):
-    java -cp "out:lib/json-parser.jar" middleware.AuthProtocolTest localhost 5150
-    # Arka Yuz protokol testi (18 test):
-    java -cp "out:lib/json-parser.jar" middleware.BackendProtocolTest localhost 5150
-
-## IKI PROTOKOL, TEK SUNUCU
-
-Sunucu gelen her satiri okuyup hangi protokol oldugunu anlar ve dogru
-router'a yonlendirir (ProtocolDispatcher). Ikisi de AYNI DataStore ve
-AuthService'i kullanir; yani On Yuz ve Arka Yuz ayni veriyi paylasir.
-
-Ayirt etme kurali: BUYUK HARF action + "username" alani -> Arka Yuz;
-noktali action (records.create) + "token" -> On Yuz.
-
-Varsayilan port 5150'dir (PROTOKOL.md). Farkli port: `java middleware.Main 5000`.
+**Tek protokol:** Her iki istemci de ayni sozlesmeyi kullanir (PROTOKOL.md).
 
 ---
 
-## On Yuz Protokolu (frontend tcp_socket_service.dart ile birebir)
+## Hizli baslangic
 
-Her mesaj TEK SATIR JSON'dur ve '\n' ile biter.
+### Docker ile (onerilen)
 
-İstek:
-    {"requestId":"<id>","action":"<action>","token":"<varsa>","payload":{...}}
+    docker compose up -d --build          # yerel
+    docker compose -f docker-compose.server.yml up -d --build   # sunucu
 
-Cevap:
-    {"requestId":"<id>","ok":true,"data":<...>}
-    {"requestId":"<id>","ok":false,"error":"<mesaj>"}
+Ayrintili kullanim: **DOCKER.md** — sunucu kurulumu: **DEPLOY.md**
 
-requestId cevaba AYNEN geri konur; frontend istek/cevap eşleşmesini bununla yapar.
+### Dogrudan Java ile
 
-## Action listesi
+    # Derleme
+    javac -encoding UTF-8 -cp "lib/*" -d out $(find src -name "*.java")     # Linux/Mac
+    # Windows PowerShell:
+    # javac -encoding UTF-8 -cp "lib/*" -d out (Get-ChildItem -Recurse src -Filter *.java).FullName
 
-    auth.login {email,password} -> {..user.., token}
-    auth.logout {} (token)      auth.me {} (token)      auth.requestReset {email}
-    databases.list {includeDeleted}    databases.getById {id}
-    databases.create {name,department,description}     databases.update {id,...}
-    databases.softDelete {id}   databases.restore {id}   databases.permanentDelete {id}
-    records.list {databaseId,collectionName,searchQuery?}    records.getById {id,...}
-    records.create {databaseId,collectionName,data}   records.update {id,...}
-    records.delete {id,...}   records.import {..,records:[...]}   records.export {..,format}
-    users.list {}   users.getById {id}   users.create {name,email,password,role,departments,permissions}
-    dashboard.stats {}   dashboard.systemStatus {}   ping {}
+    # Terminal 1 - sunucu (varsayilan port 5150)
+    java -cp "out:lib/*" middleware.Main         # Windows: "out;lib/*"
 
-## Kimlik doğrulama ve yetki
+    # Terminal 2 - protokol + yetki testi (50 test)
+    java -cp "out:lib/*" middleware.ProtocolTest localhost 5150
 
-- auth.login email+şifre doğrular, token döner. Sonraki her istek token taşır.
-- Yazma/güncelleme/silme action'ları ilgili Permission'ı kontrol eder; yoksa reddeder.
-- Yetki isimleri frontend Permission enum'ı ile birebir aynı:
-  databaseView, databaseCreate, dataView, dataCreate, dataUpdate, dataDelete, dataImport, dataExport
-- users.* action'ları super admin gerektirir.
+    # Elle deneme
+    java -cp "out:lib/*" middleware.TestClient
+    java -cp "out:lib/*" middleware.ObserverClient    # canli guncelleme izleme
 
-Başlangıç kullanıcıları (demo):
-    ayse@company.com   / Ddsfkln1as1sFd  -> superAdmin (tüm yetkiler)
-    mehmet@company.com / 3QPKdvlca34avSl   -> user (databaseView, dataView, dataCreate)
+---
 
-## Arka Yuz Protokolu
+## Protokol
 
-Istek : {"requestId":"..","action":"WRITE","username":"..","password":"..",
-         "database":"okul","collection":"ogrenciler","filter":{..},"document":{..}}
-Cevap : {"requestId":"..","status":"OK|UNAUTHORIZED|ERROR","message":"..","data":[..]}
+Her mesaj tek satir JSON'dur ve `\n` ile biter (UTF-8).
 
-Action'lar: PING, READ, WRITE, UPDATE, DELETE, LIST_DATABASES, LIST_COLLECTIONS.
-Her istek username+password tasir (token degil). Yetki eslemesi:
-READ->dataView, WRITE->dataCreate, UPDATE->dataUpdate, DELETE->dataDelete,
-LIST_*->databaseView. Yetkisiz istek status:"UNAUTHORIZED" doner.
+**Istek**
+
+    {"requestId":"..","action":"WRITE","username":"..","password":"..",
+     "database":"okul","collection":"ogrenciler",
+     "filter":{...},"document":{...}}
+
+**Cevap**
+
+    {"requestId":"..","status":"OK|UNAUTHORIZED|ERROR","message":"..","data":[...]}
+
+`data` **her zaman dizidir** (bos olabilir). Tek nesne donen islemlerde
+istemci `data[0]` okur.
+
+Kimlik her istekte `username` + `password` ile dogrulanir; token yoktur.
+`username` alanina **tam e-posta** yazilir.
+
+### Action listesi
+
+    Cekirdek   PING  READ  WRITE  UPDATE  DELETE
+               LIST_DATABASES  LIST_COLLECTIONS
+    Kimlik     LOGIN
+    Veritabani CREATE_DATABASE  UPDATE_DATABASE  DELETE_DATABASE
+               RESTORE_DATABASE  DROP_DATABASE  LIST_DATABASES_INFO
+    Koleksiyon CREATE_COLLECTION  DROP_COLLECTION
+    Kullanici  LIST_USERS  CREATE_USER
+    Ozet       STATS
+    Observer   SUBSCRIBE  UNSUBSCRIBE
+
+Tam sozlesme ve ornekler: **PROTOKOL.md**
+
+---
+
+## Yetkiler (Ister_0013, Ister_0015)
+
+Yetki isimleri On Yuz'un Permission listesiyle birebir aynidir:
+
+    databaseView  databaseCreate
+    dataView  dataCreate  dataUpdate  dataDelete
+    dataImport  dataExport
+
+Rol: `superAdmin` (tum yetkiler) veya `user` (yalnizca verilenler).
+`LIST_USERS` ve `CREATE_USER` super admin gerektirir.
+
+Yetkisiz istek `status: "UNAUTHORIZED"` doner.
+
+Baslangic kullanicilari `src/middleware/auth/AuthService.java` icindeki
+`seedUsers()` metodunda tanimlidir. Sifreler bu belgede paylasilmaz;
+ekip icinden edinilir.
+
+---
+
+## Ekip icin belgeler
+
+| Belge | Kime |
+|---|---|
+| **PROTOKOL.md** | Sunucuya baglanacak herkes — tam sozlesme |
+| **FRONTEND-GECIS.md** | On Yuz gelistiricisi — nelerin degismesi gerektigi |
+| **BAGLANTI-REHBERI.md** | Ekip arkadaslari — adim adim baglanma |
+| **DOCKER.md** | Docker kullanimi |
+| **DEPLOY.md** | AWS sunucu kurulumu |
+
+---
 
 ## MongoDB notu
 
-Veriler şu an bellekte (DataStore) tutulur; sunucu yeniden başlayınca sıfırlanır.
-DataStore'un içi gerçek MongoDB çağrılarıyla değiştirilecek;
-RequestRouter, auth ve protokol katmanına dokunulmayacak.
+Veriler su an bellekte (`DataStore`) tutulur; sunucu yeniden baslayinca
+sifirlanir. Ister_0016/0017 icin `DataStore`'un yerini gercek MongoDB
+alacak; protokol ve yetki katmanina dokunulmayacak.
 
-## Dosya yapısı
+---
+
+## Dosya yapisi
 
     src/middleware/
-      Main.java  TestClient.java  ObserverClient.java  AuthProtocolTest.java
-      auth/{User,AuthService}.java          -> kimlik + yetki
-      protocol/RequestRouter.java           -> action yönlendirme + yetki + zarf
-      events/{Event,Observer,EventBus,ConsoleLogObserver}.java
-      server/{TcpServer,ClientHandler,ClientSession}.java
-      storage/DataStore.java                -> geçici in-memory DB
+      Main.java              -> giris noktasi, port ve baglantilar
+      ProtocolTest.java      -> 50 testlik protokol + yetki paketi
+      TestClient.java        -> elle deneme istemcisi
+      ObserverClient.java    -> canli guncelleme izleyici
+
+      auth/User.java         -> kullanici + yetki modeli
+      auth/AuthService.java  -> kimlik dogrulama, kullanici yonetimi
+
+      protocol/Router.java   -> TEK protokol: action yonlendirme + yetki + zarf
+
+      events/                -> Observer deseni (Event, Observer, EventBus,
+                                ConsoleLogObserver)
+      server/                -> TcpServer, ClientHandler, ClientSession
+      storage/DataStore.java -> gecici bellek ici veritabani
+
+    lib/json-parser.jar      -> ayri projeden gelen JSON kutuphanesi
+    Dockerfile  docker-compose.yml  docker-compose.server.yml

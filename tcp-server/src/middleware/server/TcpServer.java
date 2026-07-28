@@ -7,18 +7,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import middleware.events.EventBus;
-import middleware.protocol.ProtocolDispatcher;
+import middleware.protocol.Router;
 
 public class TcpServer {
 
     private final int port;
-    private final ProtocolDispatcher dispatcher;
+    private final Router router;
     private final EventBus eventBus;
     private static final int MAX_CLIENT = 16;
 
-    public TcpServer(int port, ProtocolDispatcher dispatcher, EventBus eventBus) {
+    public TcpServer(int port, Router router, EventBus eventBus) {
         this.port = port;
-        this.dispatcher = dispatcher;
+        this.router = router;
         this.eventBus = eventBus;
     }
 
@@ -36,7 +36,7 @@ public class TcpServer {
 
             while (true) {
                 Socket client = serverSocket.accept();
-                pool.submit(new ClientHandler(client, dispatcher, eventBus));
+                pool.submit(new ClientHandler(client, router, eventBus));
             }
         }
     }

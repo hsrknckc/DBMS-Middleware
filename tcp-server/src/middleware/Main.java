@@ -3,23 +3,14 @@ package middleware;
 import middleware.auth.AuthService;
 import middleware.events.ConsoleLogObserver;
 import middleware.events.EventBus;
-import middleware.protocol.RequestRouter;
-import middleware.protocol.BackendRouter;
-import middleware.protocol.ProtocolDispatcher;
+import middleware.protocol.Router;
 import middleware.server.TcpServer;
 import middleware.storage.DataStore;
 
 public class Main {
 
     public static void main(String[] args) throws Exception {
-        int port = 5150;
-        String envPort = System.getenv("PORT");
-        if (envPort != null && !envPort.isBlank()) {
-            port = Integer.parseInt(envPort.trim());
-        }
-        if (args.length > 0) {
-            port = Integer.parseInt(args[0]);
-        }
+        int port = resolvePort(args);
 
         DataStore store = new DataStore();
         store.loadSampleData();
@@ -29,10 +20,21 @@ public class Main {
 
         AuthService auth = new AuthService();
 
-        RequestRouter frontendRouter = new RequestRouter(store, eventBus, auth);
-        BackendRouter backendRouter = new BackendRouter(store, eventBus, auth);
-        ProtocolDispatcher dispatcher = new ProtocolDispatcher(frontendRouter, backendRouter);
+        Router router = new Router(store, eventBus, auth);
 
-        new TcpServer(port, dispatcher, eventBus).start();
+        new TcpServer(port, router, eventBus).start();
+    }
+
+    /** Oncelik: komut satiri argumani > PORT ortam degiskeni > varsayilan. */
+    private static int resolvePort(String[] args) {
+        int port = 5150; // PROTOKOL.md varsayilan portu
+        String envPort = System.getenv("PORT");
+        if (envPort != null && !envPort.isBlank()) {
+            port = Integer.parseInt(envPort.trim());
+        }
+        if (args.length > 0) {
+            port = Integer.parseInt(args[0]);
+        }
+        return port;
     }
 }
