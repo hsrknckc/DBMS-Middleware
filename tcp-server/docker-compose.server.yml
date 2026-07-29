@@ -57,8 +57,13 @@ services:
       PORT: "5150"
       MONGO_URI: "mongodb://mongo:27017"
       MONGO_DB: "dbms"
+      # On Yuz'un olusturdugu veritabani talep dosyalarinin klasoru
+      # (Ister_0011). Asagidaki volume ile makineden erisilebilir.
+      REQUEST_DIR: "/app/db-requests"
       # Kucuk makinelerde JVM'in tum bellegi yemesini engeller.
       JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8 -Xmx256m"
+    volumes:
+      - ./db-requests:/app/db-requests
     depends_on:
       mongo:
         condition: service_healthy

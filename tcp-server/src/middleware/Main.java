@@ -1,37 +1,41 @@
 package middleware;
 
 import middleware.auth.AuthService;
+import middleware.config.AppConfig;
 import middleware.events.ConsoleLogObserver;
+import middleware.events.Event;
 import middleware.events.EventBus;
+import middleware.file.RequestFileService;
 import middleware.protocol.Router;
 import middleware.server.TcpServer;
 import middleware.storage.InMemoryStore;
 import middleware.storage.MongoStore;
 import middleware.storage.Store;
 
-/**
- * Giris noktasi.
- *
- *   TcpServer -> Router (tek protokol, PROTOKOL.md) -> Store
- *                                                      |- InMemoryStore
- *                                                      |- MongoStore
- *
- * Yapilandirma ortam degiskenlerinden okunur; koda gomulu degildir:
- *   PORT      -> dinlenecek port (varsayilan 5150)
- *   MONGO_URI -> MongoDB adresi; verilmezse bellek deposu kullanilir
- *   MONGO_DB  -> varsayilan veritabani adi (varsayilan "dbms")
- */
 public class Main {
 
+    /** Sunucu durumu olaylarinin yayinlandigi sanal koleksiyon. */
+    private static final String SERVER_STATUS_TOPIC = "__server__/status";
+
     public static void main(String[] args) throws Exception {
-        int port = resolvePort(args);
-        Store store = createStore();
+        AppConfig config = new AppConfig();
+        if (config.loadedFrom() != null) {
+            System.out.println("[config] Yapilandirma okundu: " + config.loadedFrom());
+        }
+
+        int port = resolvePort(args, config);
 
         EventBus eventBus = new EventBus();
         eventBus.register(new ConsoleLogObserver());
 
+        Store store = createStore(config, eventBus);
+
+        RequestFileService files = new RequestFileService(config.requestDirectory());
+        files.ensureBaseDirectory();
+        System.out.println("[file] Talep klasoru: " + files.baseDirectory());
+
         AuthService auth = new AuthService();
-        Router router = new Router(store, eventBus, auth);
+        Router router = new Router(store, eventBus, auth, files);
 
         // Sunucu kapanirken veritabani baglantisini duzgunce kapat.
         Runtime.getRuntime().addShutdownHook(new Thread(store::close));
@@ -39,40 +43,49 @@ public class Main {
         new TcpServer(port, router, eventBus).start();
     }
 
-    /** Oncelik: komut satiri argumani > PORT ortam degiskeni > varsayilan. */
-    private static int resolvePort(String[] args) {
-        int port = 5150; // PROTOKOL.md varsayilan portu
-        String envPort = System.getenv("PORT");
-        if (envPort != null && !envPort.isBlank()) {
-            port = Integer.parseInt(envPort.trim());
-        }
+    /** Komut satiri argumani her seyi ezer; yoksa yapilandirmaya bakilir. */
+    private static int resolvePort(String[] args, AppConfig config) {
         if (args.length > 0) {
-            port = Integer.parseInt(args[0]);
+            try {
+                return Integer.parseInt(args[0].trim());
+            } catch (NumberFormatException e) {
+                System.out.println("[config] UYARI: gecersiz port argumani '" + args[0] + "'");
+            }
         }
-        return port;
+        return config.serverPort(5150); // PROTOKOL.md varsayilan portu
     }
 
     /**
-     * MONGO_URI tanimliysa MongoDB'ye baglanmayi dener.
+     * MongoDB adresi cozulebiliyorsa baglanmayi dener.
      * Baglanti kurulamazsa sunucu CALISMAYA DEVAM EDER ama bellek deposuna
      * duser ve bunu acikca uyarir — sessizce veri kaybetmektense gorunur
      * bir uyari vermek yeglenir.
+     *
+     * MongoDB kullanildiginda sunucu erisilebilirligi Observer deseni ile
+     * izlenir; durum degistiginde abonelere olay gonderilir.
      */
-    private static Store createStore() {
-        String uri = System.getenv("MONGO_URI");
+    private static Store createStore(AppConfig config, EventBus eventBus) {
+        String uri = config.mongoUri();
 
         if (uri == null || uri.isBlank()) {
-            System.out.println("[store] MONGO_URI tanimli degil -> bellek deposu (veriler kalici DEGIL)");
-            Store store = new InMemoryStore();
-            store.loadSampleData();
-            return store;
+            System.out.println("[store] MongoDB adresi tanimli degil -> bellek deposu (veriler kalici DEGIL)");
+            return inMemory();
         }
 
-        String dbName = System.getenv("MONGO_DB");
-        if (dbName == null || dbName.isBlank()) dbName = "dbms";
+        String dbName = config.mongoDatabase();
 
         try {
-            MongoStore mongo = new MongoStore(uri, dbName);
+            // Observer: heartbeat durumu degistikce hem loga yazilir hem
+            // abone istemcilere push edilir.
+            MongoStore mongo = new MongoStore(uri, dbName, available -> {
+                System.out.println("[store] MongoDB durumu: "
+                        + (available ? "ERISILEBILIR" : "ERISILEMIYOR"));
+                eventBus.publish(new Event(
+                        available ? "server_up" : "server_down",
+                        SERVER_STATUS_TOPIC,
+                        java.util.Map.of("available", available)));
+            });
+
             if (mongo.isHealthy()) {
                 System.out.println("[store] MongoDB baglantisi kuruldu: " + uri + " (db: " + dbName + ")");
                 return mongo;
@@ -84,6 +97,10 @@ public class Main {
         }
 
         System.out.println("[store] UYARI: bellek deposuna dusuldu - VERILER KALICI DEGIL!");
+        return inMemory();
+    }
+
+    private static Store inMemory() {
         Store store = new InMemoryStore();
         store.loadSampleData();
         return store;

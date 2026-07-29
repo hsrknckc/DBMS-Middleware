@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Ara katman yapilandirmasi.
+
+  Bu dosyayi "config.xml" adiyla kopyalayip degerleri duzenleyin.
+  Ortam degiskenleri (PORT, MONGO_URI, MONGO_DB, REQUEST_DIR) buradaki
+  degerleri EZER; Docker ortam degiskeni kullanir.
+
+  Dosya su klasorlerde aranir (sirayla):
+    MONGO_CONFIG_DIR ortam degiskenindeki klasor
+    CONFIG_DIR ortam degiskenindeki klasor
+    calisma dizini
+-->
+<xmlConfig>
+
+    <!-- MongoDB adresi ve portu. Ikisi birlestirilerek
+         mongodb://<adres>:<port> baglanti adresi uretilir.
+         Bos birakilirsa bellek deposu kullanilir. -->
+    <MongoAddress>localhost</MongoAddress>
+    <MongoPort>27017</MongoPort>
+
+    <!-- Varsayilan veritabani adi -->
+    <MongoDatabase>dbms</MongoDatabase>
+
+    <!-- Ara katmanin dinleyecegi TCP portu (PROTOKOL.md varsayilani 5150) -->
+    <ServerPort>5150</ServerPort>
+
+    <!-- Veritabani talep dosyalarinin klasoru (Ister_0011) -->
+    <RequestDir>db-requests</RequestDir>
+
+</xmlConfig>

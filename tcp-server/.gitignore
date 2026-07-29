@@ -13,3 +13,6 @@ sources.txt
 .DS_Store
 Thumbs.db
 kaynaklar.txt
+
+# Kisiye ozel yapilandirma
+config.xml

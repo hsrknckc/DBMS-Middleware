@@ -36,6 +36,21 @@ Ayrintili kullanim: **DOCKER.md** — sunucu kurulumu: **DEPLOY.md**
 
 ---
 
+## Yapilandirma
+
+Ayarlar koda gomulu degildir. Oncelik sirasi (ustteki alttakini ezer):
+
+    1. Komut satiri argumani   (yalnizca port)
+    2. Ortam degiskeni         PORT, MONGO_URI, MONGO_DB, REQUEST_DIR
+    3. config.xml dosyasi      ServerPort, MongoAddress, MongoPort, ...
+    4. Varsayilan deger
+
+`config.xml.example` dosyasini `config.xml` olarak kopyalayip duzenleyin.
+Docker ortam degiskeni kullandigi icin konteynerde config.xml gerekmez.
+
+config.xml su klasorlerde aranir: `MONGO_CONFIG_DIR`, `CONFIG_DIR`,
+calisma dizini.
+
 ## Protokol
 
 Her mesaj tek satir JSON'dur ve `\n` ile biter (UTF-8).
@@ -65,6 +80,7 @@ Kimlik her istekte `username` + `password` ile dogrulanir; token yoktur.
                RESTORE_DATABASE  DROP_DATABASE  LIST_DATABASES_INFO
     Koleksiyon CREATE_COLLECTION  DROP_COLLECTION
     Kullanici  LIST_USERS  CREATE_USER
+    Talep      CHECK_FILE  IMPORT_FILE  DESCRIBE_COLLECTION
     Ozet       STATS
     Observer   SUBSCRIBE  UNSUBSCRIBE
 
@@ -72,7 +88,7 @@ Tam sozlesme ve ornekler: **PROTOKOL.md**
 
 ---
 
-## Yetkiler 
+## Yetkiler
 
 Yetki isimleri On Yuz'un Permission listesiyle birebir aynidir:
 
@@ -104,7 +120,7 @@ ekip icinden edinilir.
 
 ---
 
-## MongoDB
+## MongoDB (Ister_0016 / 0017)
 
 Veri katmani `Store` arayuzu arkasindadir; iki uygulamasi vardir:
 `InMemoryStore` (bellekte, gecici) ve `MongoStore` (gercek MongoDB).
@@ -128,6 +144,8 @@ icin: **MONGODB.md**
       auth/AuthService.java  -> kimlik dogrulama, kullanici yonetimi
 
       protocol/Router.java   -> TEK protokol: action yonlendirme + yetki + zarf
+      file/RequestFileService.java -> talep dosyasi kontrolu (Ister_0011/0012)
+      config/AppConfig.java        -> yapilandirma (config.xml + ortam degiskeni)
 
       events/                -> Observer deseni (Event, Observer, EventBus,
                                 ConsoleLogObserver)

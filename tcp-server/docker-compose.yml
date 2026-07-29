@@ -47,6 +47,11 @@ services:
       # konteynerin kendisi anlamina gelirdi.
       MONGO_URI: "mongodb://mongo:27017"
       MONGO_DB: "dbms"
+      # On Yuz'un olusturdugu veritabani talep dosyalarinin klasoru
+      # (Ister_0011). Asagidaki volume ile makineden erisilebilir.
+      REQUEST_DIR: "/app/db-requests"
+    volumes:
+      - ./db-requests:/app/db-requests
     depends_on:
       mongo:
         condition: service_healthy

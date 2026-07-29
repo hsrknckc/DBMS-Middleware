@@ -8,7 +8,15 @@ import java.util.UUID;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
 import org.bson.Document;
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.event.ServerHeartbeatFailedEvent;
+import com.mongodb.event.ServerHeartbeatSucceededEvent;
+import com.mongodb.event.ServerMonitorListener;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -47,12 +55,51 @@ public class MongoStore implements Store {
     private final String defaultDatabase;
 
     /**
+     * Sunucunun su anki erisilebilirligi.
+     *
+     * OBSERVER DESENI: Surucu, MongoDB sunucusuna duzenli araliklarla
+     * "heartbeat" gonderir. Asagida kaydedilen dinleyici bu olaylari
+     * yakalayip bu bayragi gunceller. Boylece isHealthy() her cagrildiginda
+     * aga cikmak yerine son bilinen durumu okur.
+     */
+    private final AtomicBoolean available = new AtomicBoolean(false);
+
+    public MongoStore(String uri, String defaultDatabase) {
+        this(uri, defaultDatabase, null);
+    }
+
+    /**
      * @param uri             baglanti adresi, orn. "mongodb://mongo:27017"
      * @param defaultDatabase koleksiyon adinda "/" yoksa kullanilacak veritabani
+     * @param onChange        erisilebilirlik degistiginde cagrilir (Observer);
+     *                        null verilebilir
      */
-    public MongoStore(String uri, String defaultDatabase) {
-        this.client = MongoClients.create(uri);
+    public MongoStore(String uri, String defaultDatabase, Consumer<Boolean> onChange) {
         this.defaultDatabase = defaultDatabase;
+
+        // Sunucu izleyicisi, istemci kurulurken kaydedilmelidir.
+        ServerMonitorListener monitor = new ServerMonitorListener() {
+            @Override
+            public void serverHeartbeatSucceeded(ServerHeartbeatSucceededEvent event) {
+                if (available.compareAndSet(false, true) && onChange != null) {
+                    onChange.accept(true);
+                }
+            }
+
+            @Override
+            public void serverHeartbeatFailed(ServerHeartbeatFailedEvent event) {
+                if (available.compareAndSet(true, false) && onChange != null) {
+                    onChange.accept(false);
+                }
+            }
+        };
+
+        MongoClientSettings settings = MongoClientSettings.builder()
+                .applyConnectionString(new ConnectionString(uri))
+                .applyToServerSettings(builder -> builder.addServerMonitorListener(monitor))
+                .build();
+
+        this.client = MongoClients.create(settings);
     }
 
     // ------------------------------------------------------------
@@ -232,10 +279,19 @@ public class MongoStore implements Store {
     //  Saglik ve yasam dongusu
     // ------------------------------------------------------------
 
+    /**
+     * Ister_0018: veritabani sunucusu aktif mi?
+     *
+     * Once izleyicinin (Observer) bildirdigi son duruma bakilir — bu,
+     * her istekte aga cikmayi onler. Izleyici henuz bir sinyal
+     * uretmediyse (ilk saniyeler) dogrudan ping atilir.
+     */
     @Override
     public boolean isHealthy() {
+        if (available.get()) return true;
         try {
             client.getDatabase(defaultDatabase).runCommand(new Document("ping", 1));
+            available.set(true);
             return true;
         } catch (Exception e) {
             return false;

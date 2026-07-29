@@ -7,21 +7,16 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
-/**
- * TEK PROTOKOL testi (PROTOKOL.md).
- *
- *   Terminal 1: java -cp "out;lib/*" middleware.Main
- *   Terminal 2: java -cp "out;lib/*" middleware.ProtocolTest
- *
- * Ilk argumanla adres, ikinciyle port verilebilir:
- *   java -cp "out;lib/*" middleware.ProtocolTest 54.154.220.190 5150
- */
 public class ProtocolTest {
 
     static final String ADMIN_USER = "ayse@company.com";
     static final String ADMIN_PASS = "Ddsfkln1as1sFd";
     static final String LIMITED_USER = "mehmet@company.com";
     static final String LIMITED_PASS = "3QPKdvlca34avSl";
+
+    static final String TEST_DB = "protokol_test_db";
+    static final String TEST_FILE = "protokol-test.json";
+    static final String BROKEN_FILE = "protokol-test-bozuk.json";
 
     static String host = "localhost";
     static int port = 5150;
@@ -196,6 +191,48 @@ public class ProtocolTest {
                     + ",\"document\":{\"email\":\"yeni@company.com\"}}");
             check("duplicate email rejected", cuDup.contains("already exists"));
 
+            // Dosya testleri sunucu ile AYNI makinede calisirken anlamlidir;
+            // uzak sunucuya karsi calistirilirken atlanir.
+            if (host.equals("localhost") || host.equals("127.0.0.1")) {
+                section("Request file (Ister_0011 / Ister_0012)");
+                prepareRequestFiles();
+
+                String chk = rpc(out, in, "{\"requestId\":\"f1\",\"action\":\"CHECK_FILE\"," + admin()
+                        + ",\"document\":{\"path\":\"" + TEST_FILE + "\"}}");
+                check("existing file reported as present", chk.contains("\"exists\":true"));
+                check("file content recognised as valid JSON", chk.contains("\"validJson\":true"));
+
+                String missing = rpc(out, in, "{\"requestId\":\"f2\",\"action\":\"CHECK_FILE\"," + admin()
+                        + ",\"document\":{\"path\":\"olmayan-dosya.json\"}}");
+                check("missing file reported as absent", missing.contains("\"exists\":false"));
+
+                String broken = rpc(out, in, "{\"requestId\":\"f3\",\"action\":\"CHECK_FILE\"," + admin()
+                        + ",\"document\":{\"path\":\"" + BROKEN_FILE + "\"}}");
+                check("invalid JSON detected", broken.contains("\"exists\":true")
+                        && broken.contains("\"validJson\":false"));
+
+                String escape = rpc(out, in, "{\"requestId\":\"f4\",\"action\":\"CHECK_FILE\"," + admin()
+                        + ",\"document\":{\"path\":\"../../etc/passwd\"}}");
+                check("path traversal is rejected", escape.contains("outside the request directory"));
+
+                String imp = rpc(out, in, "{\"requestId\":\"f5\",\"action\":\"IMPORT_FILE\"," + admin()
+                        + ",\"document\":{\"path\":\"" + TEST_FILE + "\"}}");
+                check("IMPORT_FILE succeeds", imp.contains("Import completed"));
+                check("collections created from file", imp.contains("test_kayitlar"));
+                check("records inserted from file", imp.contains("\"recordsInserted\":2"));
+
+                String cols = rpc(out, in, "{\"requestId\":\"f6\",\"action\":\"LIST_COLLECTIONS\"," + admin()
+                        + ",\"database\":\"" + TEST_DB + "\"}");
+                check("imported collection is listed", cols.contains("test_kayitlar"));
+
+                String desc = rpc(out, in, "{\"requestId\":\"f7\",\"action\":\"DESCRIBE_COLLECTION\"," + admin()
+                        + ",\"database\":\"" + TEST_DB + "\",\"collection\":\"test_kayitlar\"}");
+                check("field definitions are stored", desc.contains("\"name\":\"baslik\""));
+
+                rpc(out, in, "{\"requestId\":\"f8\",\"action\":\"DROP_DATABASE\"," + admin()
+                        + ",\"database\":\"" + TEST_DB + "\"}");
+            }
+
             section("STATS");
             String st = rpc(out, in, "{\"requestId\":\"31\",\"action\":\"STATS\"," + admin() + "}");
             check("stats has totalDatabases", st.contains("totalDatabases"));
@@ -246,6 +283,34 @@ public class ProtocolTest {
 
     static void section(String title) {
         System.out.println("--- " + title + " ---");
+    }
+
+    /**
+     * Ister_0011/0012 testleri icin talep klasorune ornek dosyalar yazar.
+     * Sunucu ile ayni makinede calisildigi varsayilir.
+     */
+    static void prepareRequestFiles() throws Exception {
+        String dir = System.getenv("REQUEST_DIR");
+        if (dir == null || dir.isBlank()) dir = "db-requests";
+        java.nio.file.Path base = java.nio.file.Paths.get(dir);
+        java.nio.file.Files.createDirectories(base);
+
+        String content = "{"
+                + "\"database\":\"" + TEST_DB + "\","
+                + "\"department\":\"Test\","
+                + "\"description\":\"protokol testi\","
+                + "\"collections\":[{"
+                + "  \"name\":\"test_kayitlar\","
+                + "  \"fields\":[{\"name\":\"baslik\",\"type\":\"string\"},"
+                + "             {\"name\":\"adet\",\"type\":\"int\"}],"
+                + "  \"records\":[{\"baslik\":\"bir\",\"adet\":1},"
+                + "              {\"baslik\":\"iki\",\"adet\":2}]"
+                + "}]}";
+
+        java.nio.file.Files.write(base.resolve(TEST_FILE),
+                content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        java.nio.file.Files.write(base.resolve(BROKEN_FILE),
+                "{ bu bozuk".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /** Cevaptan bir alanin ilk degerini cikarir (basit metin arama). */

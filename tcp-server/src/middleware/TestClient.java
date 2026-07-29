@@ -7,11 +7,6 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
-/**
- * Elle deneme istemcisi (tek protokol, PROTOKOL.md).
- *
- *   java -cp "out;lib/*" middleware.TestClient [host] [port]
- */
 public class TestClient {
 
     private static final String USER = "ayse@company.com";

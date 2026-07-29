@@ -10,41 +10,29 @@ import middleware.auth.AuthService;
 import middleware.auth.User;
 import middleware.events.Event;
 import middleware.events.EventBus;
+import middleware.file.RequestFileService;
 import middleware.server.ClientSession;
 import middleware.storage.Store;
 
-/**
- * TEK PROTOKOL - PROTOKOL.md sozlesmesi.
- *
- * On Yuz ve Arka Yuz ayni protokolu konusur; ayri router yoktur.
- *
- * ISTEK:
- *   {"requestId":"..","action":"..","username":"..","password":"..",
- *    "database":"..","collection":"..","filter":{..},"document":{..}}
- *
- * CEVAP:
- *   {"requestId":"..","status":"OK|UNAUTHORIZED|ERROR","message":"..","data":[..]}
- *
- * "data" HER ZAMAN bir dizidir (bos olabilir). Tek nesne donen islemlerde
- * dizi tek elemanlidir; istemci data[0] okur.
- *
- * Kimlik dogrulama her istekte username+password ile yapilir (token yoktur).
- * Yetki kontrolu (Ister_0013, Ister_0015) action bazinda asagida eslenmistir.
- */
 public class Router {
 
     /** Veritabani ust verisinin tutuldugu ayrilmis alan. */
     private static final String META_DB = "__meta__";
     private static final String META_DATABASES = META_DB + "/databases";
 
+    /** Sema (alan tanimi) ust verisinin tutuldugu ayrilmis koleksiyon. */
+    private static final String META_SCHEMAS = META_DB + "/schemas";
+
     private final Store store;
     private final EventBus eventBus;
     private final AuthService auth;
+    private final RequestFileService files;
 
-    public Router(Store store, EventBus eventBus, AuthService auth) {
+    public Router(Store store, EventBus eventBus, AuthService auth, RequestFileService files) {
         this.store = store;
         this.eventBus = eventBus;
         this.auth = auth;
+        this.files = files;
     }
 
     // ============================================================
@@ -97,6 +85,11 @@ public class Router {
                 case "LIST_USERS"       -> listUsers(requestId, user);
                 case "CREATE_USER"      -> createUser(requestId, user, req);
 
+                // --- Talep dosyasi (Ister_0011, Ister_0012) ---
+                case "CHECK_FILE"          -> checkFile(requestId, user, req);
+                case "IMPORT_FILE"         -> importFile(requestId, user, req);
+                case "DESCRIBE_COLLECTION" -> describeCollection(requestId, user, req);
+
                 // --- Ozet bilgiler ---
                 case "STATS"            -> stats(requestId, user);
 
@@ -111,6 +104,10 @@ public class Router {
             return error(requestId, "Invalid JSON: " + e.getMessage());
         } catch (Denied e) {
             return unauthorized(requestId, e.getMessage());
+        } catch (RequestFileService.PathNotAllowed e) {
+            return error(requestId, e.getMessage());
+        } catch (RequestFileService.FileProblem e) {
+            return error(requestId, e.getMessage());
         } catch (Invalid e) {
             return error(requestId, e.getMessage());
         } catch (Exception e) {
@@ -417,6 +414,165 @@ public class Router {
 
         if (!auth.createUser(created)) throw new Invalid("Email already exists: " + email);
         return ok(rid, "User created: " + email, List.of(created.toPublicMap()));
+    }
+
+
+    // ============================================================
+    //  TALEP DOSYASI (Ister_0011, Ister_0012)
+    // ============================================================
+
+    /**
+     * Ister_0011: JSON formatinda olusturulan veritabani dosyasinin,
+     * dinamik olarak belirlenen dosya yolunda olup olmadigini kontrol eder.
+     *
+     * Istek: {"action":"CHECK_FILE", ..., "document":{"path":"okul.json"}}
+     * Cevap data[0]: {exists, isFile, readable, validJson, size, path, ...}
+     *
+     * Yol, sunucudaki talep klasoru altinda cozulur; disari cikan yollar
+     * reddedilir.
+     */
+    private String checkFile(String rid, User user, Map<String, Object> req) {
+        require(user, "databaseView");
+        Map<String, Object> info = files.check(filePath(req));
+        boolean exists = Boolean.TRUE.equals(info.get("exists"));
+        String message = exists ? "File found" : "File not found";
+        return ok(rid, message, List.of(info));
+    }
+
+    /**
+     * Ister_0012: JSON dosyasinin icerigine gore veritabaninda alan yaratir.
+     *
+     * Beklenen dosya bicimi:
+     *   {
+     *     "database": "okul",
+     *     "department": "Egitim",
+     *     "description": "...",
+     *     "collections": [
+     *       {"name":"ogrenciler",
+     *        "fields":[{"name":"ad","type":"string"},{"name":"sinif","type":"int"}],
+     *        "records":[{"ad":"Ali","sinif":3}]}
+     *     ]
+     *   }
+     *
+     * "records" istege baglidir; verilirse baslangic kayitlari eklenir.
+     */
+    @SuppressWarnings("unchecked")
+    private String importFile(String rid, User user, Map<String, Object> req) {
+        require(user, "databaseCreate");
+
+        Map<String, Object> content = files.readJson(filePath(req));
+
+        String dbName = str(content, "database");
+        if (dbName == null) throw new Invalid("File must contain a 'database' field");
+        if (META_DB.equals(dbName)) throw new Invalid("Reserved database name: " + META_DB);
+
+        // 1) Veritabani ust verisi (yoksa olustur)
+        Map<String, Object> meta = findDatabaseMeta(dbName);
+        if (meta == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("name", dbName);
+            data.put("department", strOr(content, "department", ""));
+            data.put("description", strOr(content, "description", ""));
+            data.put("isDeleted", false);
+            data.put("deletedBy", null);
+            meta = store.insert(META_DATABASES, data);
+            eventBus.publish(new Event("insert", META_DATABASES, meta));
+        }
+
+        // 2) Koleksiyonlar, alan tanimlari ve baslangic kayitlari
+        List<String> createdCollections = new ArrayList<>();
+        long insertedRecords = 0;
+
+        Object colsObj = content.get("collections");
+        if (colsObj instanceof List<?> cols) {
+            for (Object c : cols) {
+                if (!(c instanceof Map)) continue;
+                Map<String, Object> col = (Map<String, Object>) c;
+
+                String colName = str(col, "name");
+                if (colName == null) continue;
+
+                if (store.createCollection(dbName, colName)) {
+                    createdCollections.add(colName);
+                    eventBus.publish(new Event("insert", Store.key(dbName, colName),
+                            Map.of("collection", colName)));
+                }
+
+                // Alan tanimlarini sakla (Ister_0012'nin "alan yaratma" karsiligi;
+                // MongoDB semasiz oldugu icin tanimlar ust veride tutulur)
+                Object fields = col.get("fields");
+                if (fields instanceof List) {
+                    saveSchema(dbName, colName, (List<Object>) fields);
+                }
+
+                // Baslangic kayitlari
+                Object recs = col.get("records");
+                if (recs instanceof List<?> list) {
+                    for (Object rec : list) {
+                        if (rec instanceof Map) {
+                            Map<String, Object> inserted =
+                                    store.insert(Store.key(dbName, colName), (Map<String, Object>) rec);
+                            eventBus.publish(new Event("insert", Store.key(dbName, colName), inserted));
+                            insertedRecords++;
+                        }
+                    }
+                }
+            }
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("database", dbName);
+        summary.put("collectionsCreated", createdCollections);
+        summary.put("collectionCount", (long) createdCollections.size());
+        summary.put("recordsInserted", insertedRecords);
+        return ok(rid, "Import completed: " + dbName, List.of(summary));
+    }
+
+    /**
+     * Bir koleksiyonun alan tanimlarini doner (IMPORT_FILE ile kaydedilmis).
+     * On Yuz'un veri tipi ekrani icin kullanilir.
+     */
+    private String describeCollection(String rid, User user, Map<String, Object> req) {
+        require(user, "databaseView");
+        String db = databaseName(req);
+        String col = str(req, "collection");
+        if (col == null) throw new Invalid("collection field is required");
+
+        List<Map<String, Object>> found = store.find(META_SCHEMAS,
+                Map.of("database", db, "collection", col));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("database", db);
+        result.put("collection", col);
+        result.put("fields", found.isEmpty() ? List.of() : found.get(0).getOrDefault("fields", List.of()));
+        return ok(rid, "Schema for " + Store.key(db, col), List.of(result));
+    }
+
+    /** Alan tanimlarini kaydeder; ayni koleksiyon icin varsa gunceller. */
+    private void saveSchema(String database, String collection, List<Object> fields) {
+        List<Map<String, Object>> existing = store.find(META_SCHEMAS,
+                Map.of("database", database, "collection", collection));
+
+        if (existing.isEmpty()) {
+            Map<String, Object> doc = new LinkedHashMap<>();
+            doc.put("database", database);
+            doc.put("collection", collection);
+            doc.put("fields", fields);
+            store.insert(META_SCHEMAS, doc);
+        } else {
+            store.updateById(META_SCHEMAS, (String) existing.get(0).get("id"),
+                    Map.of("fields", fields));
+        }
+    }
+
+    /** Dosya yolunu istekten cikarir: document.path > filter.path > "path". */
+    private static String filePath(Map<String, Object> req) {
+        Map<String, Object> doc = mapOrEmpty(req.get("document"));
+        String path = str(doc, "path");
+        if (path == null) path = str(mapOrEmpty(req.get("filter")), "path");
+        if (path == null) path = str(req, "path");
+        if (path == null) throw new Invalid("'path' is required (in document.path)");
+        return path;
     }
 
     // ============================================================
