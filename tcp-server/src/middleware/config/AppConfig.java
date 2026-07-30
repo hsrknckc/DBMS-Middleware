@@ -101,6 +101,15 @@ public class AppConfig {
         return get("MONGO_DB", "MongoDatabase", "dbms");
     }
 
+    /**
+     * Tanimlanmamis alanlarin tipi ilk yazmada ogrenilsin mi?
+     * config.xml: <AutoSchema>false</AutoSchema> ile kapatilir.
+     */
+    public boolean autoSchema() {
+        String value = get("AUTO_SCHEMA", "AutoSchema", "true");
+        return !"false".equalsIgnoreCase(value.trim());
+    }
+
     public String requestDirectory() {
         return get("REQUEST_DIR", "RequestDir", "db-requests");
     }

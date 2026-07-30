@@ -37,6 +37,7 @@ On Yuz'un ihtiyac duydugu islemler eklenmistir.
 | `action` | string | evet | Islem turu (BUYUK HARF). Bkz. Bolum 4. |
 | `username` | string | evet | Istegi yapan kullanicinin **tam e-posta adresi**. |
 | `password` | string | evet | Kullanicinin sifresi. |
+| `name` | string | hayir | Kullanicinin gorunen adi. Yalnizca gunlukleme icindir. |
 | `database` | string | isleme gore | Hedef veritabani adi. |
 | `collection` | string | isleme gore | Hedef koleksiyon adi. |
 | `filter` | object | hayir | Hangi kayitlar? Bos/yok ise tum kayitlar. |
@@ -46,6 +47,16 @@ On Yuz'un ihtiyac duydugu islemler eklenmistir.
 
 **Kimlik dogrulama her istekte yapilir; token yoktur.** Istemci kullanici
 adi ve sifreyi oturum boyunca saklayip her istege ekler.
+
+**`name` alani hakkinda.** Istekler istege bagli olarak kullanicinin gorunen
+adini tasiyabilir; bu, sunucu gunluklerinin okunabilir olmasini saglar
+(`[user] Ayse Yilmaz (ayse@company.com) : WRITE -> okul/ogrenciler`).
+
+Ancak bu alan **yetkilendirmede ve denetim kayitlarinda kullanilmaz.**
+Guvenilir ad her zaman kimlik dogrulamasindan gelen kayitli addir — aksi
+halde bir istemci baskasinin adiyla islem yapmis gibi gorunebilirdi.
+Istekteki ad kayitli addan farkliysa sunucu bir uyari gunlukler ve kayitli
+adi kullanir.
 
 ---
 
@@ -118,8 +129,11 @@ giris ekraninin kullaniciyi tanimasi (rol, yetkiler) icindir. Sifre yanlissa
 
 | action | Ne yapar | Kullanilan alanlar | Yetki |
 |---|---|---|---|
-| `CREATE_COLLECTION` | Bos koleksiyon olusturur | database, collection | databaseCreate |
+| `CREATE_COLLECTION` | Bos koleksiyon olusturur; istege bagli alan tanimlariyla | database, collection, document{fields?} | databaseCreate |
+| `DEFINE_FIELDS` | Alan (feature) tipi tanimlar/gunceller | database, collection, document{fields} | databaseCreate |
+| `DELETE_FIELD` | Alan tanimini kaldirir | database, collection, document{name} | databaseCreate |
 | `DROP_COLLECTION` | Koleksiyonu ve kayitlarini siler | database, collection | databaseCreate |
+| `DELETE_COLLECTION` | `DROP_COLLECTION` ile ayni (takma ad) | database, collection | databaseCreate |
 
 Bos koleksiyonlar da `LIST_COLLECTIONS` sonucunda gorunur.
 
@@ -127,16 +141,49 @@ Bos koleksiyonlar da `LIST_COLLECTIONS` sonucunda gorunur.
 
 | action | Ne yapar | Kullanilan alanlar | Yetki |
 |---|---|---|---|
-| `LIST_USERS` | Kullanicilari listeler | — | super admin |
+| `LIST_USERS` | Kullanicilari listeler | filter{includeDeleted} | super admin |
 | `CREATE_USER` | Yeni kullanici ekler | document{name,email,password,role,departments,permissions} | super admin |
+| `UPDATE_USER` | Ad, rol, departman, yetki, aktiflik gunceller | filter{id}, document | super admin |
+| `UPDATE_USER_PERMISSIONS` | Yalnizca yetki ve departman (Ister_0004) | filter{id}, document{departments,permissions} | super admin |
+| `DELETE_USER` | Yumusak siler (geri alinabilir) | filter{id} | super admin |
+| `RESTORE_USER` | Yumusak silinmisi geri alir | filter{id} | super admin |
+| `DROP_USER` | Kalici siler | filter{id} | super admin |
+| `RESET_USER_PASSWORD` | Sifre sifirlar | filter{id}, document{password?} | super admin |
 
-Sifreler cevaplarda **asla** dondurulmez.
+Sifreler cevaplarda **asla** dondurulmez. Tek istisna `RESET_USER_PASSWORD`:
+uretilen yeni sifre bir kez dondurulur ki super admin kullaniciya iletebilsin.
+`document.password` verilmezse 12 karakterlik rastgele sifre uretilir.
 
-### 4.6 Ozet bilgiler
+Kullanici kendi hesabini silemez (`DELETE_USER` / `DROP_USER` reddedilir).
+
+**Kalicilik:** Kullanicilar `__meta__/users` koleksiyonunda saklanir; MongoDB
+kullaniliyorsa sunucu yeniden baslasa da korunurlar.
+
+### 4.6 Ozet bilgiler ve denetim kayitlari
 
 | action | Ne yapar | `data` icerigi | Yetki |
 |---|---|---|---|
 | `STATS` | Panel istatistikleri | `[{totalDatabases,totalCollections,totalRecords,activeUsers}]` | giris yeterli |
+| `SYSTEM_STATUS` | Sunucu ve veritabani durumu | `[{isMongoConnected,isApiOnline,lastCheckedAt}]` | giris yeterli |
+| `AUDIT_LOGS` | Denetim kayitlarini listeler | kayit listesi | super admin |
+| `RECENT_ACTIVITIES` | Son etkinlikler (pano) | `[{title,description,occurredAt,actionType}]` | databaseView |
+| `REVERT_AUDIT_LOG` | Bir islemi geri alir | filter{logId} | super admin |
+
+**Denetim kaydi alanlari:** `id`, `action`, `performedById`, `performedByName`,
+`targetUserId`, `targetUserName`, `description`, `oldValues`, `newValues`,
+`isRevertible`, `isReverted`, `revertedAt`, `revertedByName`, `occurredAt`.
+
+`AUDIT_LOGS` filtreleri: `action` (tek bir islem turu), `onlyRevertible`
+(yalnizca geri alinabilir ve henuz alinmamis olanlar), `limit`.
+
+**Geri alma:** Yalnizca `isRevertible: true` olan kayitlar geri alinabilir —
+kullanici guncelleme, yetki degisikligi ve yumusak silme islemleri. Kayit
+icindeki `oldValues` yeniden uygulanir. Ayni kayit iki kez geri alinamaz.
+
+Kaydedilen islem kodlari On Yuz'un tanidigi adlardir: `userCreated`,
+`userUpdated`, `userStatusChanged`, `userSoftDeleted`, `userRestored`,
+`userPermanentlyDeleted`, `permissionsUpdated`, `permissionsReverted`,
+`passwordResetRequested`.
 
 ### 4.7 Veritabani talep dosyasi (Ister_0011, Ister_0012)
 
@@ -223,6 +270,61 @@ filtresi `{"id":"rec-8"}` gibi calisir.
 **Silme sonucunu dogrulama:** `DELETE` hicbir kayit bulamasa bile
 `status: "OK"` doner (islem gecerlidir, sadece eslesme yoktur).
 Gercekten silinip silinmedigini `data[0].deletedCount` ile kontrol edin.
+
+### 4.10 Alan (feature) tipleri
+
+Bir alanin tipi, alan ilk olusturuldugunda belirlenir ve sonraki tum
+kayitlarda zorunlu tutulur. Iki yol vardir:
+
+**Koleksiyon olustururken:**
+```json
+{"action":"CREATE_COLLECTION","database":"ev","collection":"odalar",
+ "document":{"fields":[{"name":"oda","type":"int"},{"name":"ad","type":"string"}]}}
+```
+
+**Sonradan alan eklerken:**
+```json
+{"action":"DEFINE_FIELDS","database":"ev","collection":"odalar",
+ "document":{"fields":[{"name":"aktif","type":"boolean"}]}}
+```
+
+Tek alan icin kisa bicim de kullanilabilir:
+```json
+{"action":"DEFINE_FIELDS","database":"ev","collection":"odalar",
+ "document":{"name":"metrekare","type":"double"}}
+```
+
+Gecerli tipler: `string`, `int`, `double`, `boolean`, `array`, `object`,
+`any`. Desteklenmeyen bir tip verilirse istek reddedilir.
+
+**Tip duzeltme.** Ayni ada tekrar tanim gonderilirse tip GUNCELLENIR.
+Bu, yanlis secilmis bir tipi duzeltmeyi saglar; ancak daha once yazilmis
+kayitlar oldugu gibi kalir — gerekirse koleksiyon temizlenmelidir.
+
+**Otomatik ogrenme.** Tanimlanmamis bir alan ilk kez yazildiginda tipi
+kaydedilir ve kilitlenir. Boylece On Yuz disindan gelen yazmalar (orn.
+Arka Yuz kutuphanesi) da korunur. Bu alanlar `"inferred": true` ile
+isaretlenir. `config.xml` icinde `<AutoSchema>false</AutoSchema>` ile
+kapatilabilir.
+
+Tanimlari okumak icin `DESCRIBE_COLLECTION` kullanilir.
+
+### 4.11 Veri formati dogrulamasi (Ister_0014)
+
+Bir koleksiyon icin alan tanimlari kaydedilmisse (`IMPORT_FILE` ile gelen
+`fields` listesi), `WRITE` ve `UPDATE` isteklerindeki degerler bu tanimlara
+gore dogrulanir. Uymayan istek `ERROR` ile reddedilir:
+
+```json
+{"status":"ERROR","message":"Invalid data format: Field 'oda' must be of type int but got string"}
+```
+
+Desteklenen tipler: `string`, `int`, `double`, `boolean`, `array`, `object`,
+`any`. Gonderilmeyen alanlar kontrol edilmez (kismi guncelleme serbesttir);
+`null` her tip icin kabul edilir.
+
+Sema tanimlanmamis koleksiyonlar serbesttir — MongoDB semasiz calisir ve
+her koleksiyon icin sema zorunlu tutulmaz.
 
 ## 5. Yetkiler
 

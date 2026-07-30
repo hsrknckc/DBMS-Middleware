@@ -1,5 +1,6 @@
 package middleware;
 
+import middleware.audit.AuditService;
 import middleware.auth.AuthService;
 import middleware.config.AppConfig;
 import middleware.events.ConsoleLogObserver;
@@ -34,8 +35,9 @@ public class Main {
         files.ensureBaseDirectory();
         System.out.println("[file] Talep klasoru: " + files.baseDirectory());
 
-        AuthService auth = new AuthService();
-        Router router = new Router(store, eventBus, auth, files);
+        AuthService auth = new AuthService(store);
+        AuditService audit = new AuditService(store);
+        Router router = new Router(store, eventBus, auth, files, audit, config.autoSchema());
 
         // Sunucu kapanirken veritabani baglantisini duzgunce kapat.
         Runtime.getRuntime().addShutdownHook(new Thread(store::close));

@@ -78,7 +78,8 @@ Kimlik her istekte `username` + `password` ile dogrulanir; token yoktur.
     Kimlik     LOGIN
     Veritabani CREATE_DATABASE  UPDATE_DATABASE  DELETE_DATABASE
                RESTORE_DATABASE  DROP_DATABASE  LIST_DATABASES_INFO
-    Koleksiyon CREATE_COLLECTION  DROP_COLLECTION
+    Koleksiyon CREATE_COLLECTION  DROP_COLLECTION  DELETE_COLLECTION
+    Alan       DEFINE_FIELDS  DELETE_FIELD  DESCRIBE_COLLECTION
     Kullanici  LIST_USERS  CREATE_USER
     Talep      CHECK_FILE  IMPORT_FILE  DESCRIBE_COLLECTION
     Ozet       STATS
@@ -146,6 +147,8 @@ icin: **MONGODB.md**
       protocol/Router.java   -> TEK protokol: action yonlendirme + yetki + zarf
       file/RequestFileService.java -> talep dosyasi kontrolu (Ister_0011/0012)
       config/AppConfig.java        -> yapilandirma (config.xml + ortam degiskeni)
+      audit/AuditService.java      -> denetim kayitlari + geri alma
+      validation/SchemaValidator.java -> veri formati dogrulamasi (Ister_0014)
 
       events/                -> Observer deseni (Event, Observer, EventBus,
                                 ConsoleLogObserver)

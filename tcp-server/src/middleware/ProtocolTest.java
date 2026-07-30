@@ -40,6 +40,21 @@ public class ProtocolTest {
             check("status OK", r.contains("\"status\":\"OK\""));
             check("data is always an array", r.contains("\"data\":["));
 
+            section("Optional name field");
+            String withName = rpc(out, in, "{\"requestId\":\"n1\",\"action\":\"PING\"," + admin()
+                    + ",\"name\":\"Ayse Yilmaz\"}");
+            check("request with name field accepted", withName.contains("\"status\":\"OK\""));
+
+            String wrongName = rpc(out, in, "{\"requestId\":\"n2\",\"action\":\"PING\"," + admin()
+                    + ",\"name\":\"Baska Kisi\"}");
+            check("mismatching name does not block the request",
+                    wrongName.contains("\"status\":\"OK\""));
+
+            String loginName = rpc(out, in, "{\"requestId\":\"n3\",\"action\":\"LOGIN\"," + admin()
+                    + ",\"name\":\"Yanlis Ad\"}");
+            check("stored name is authoritative, not the claimed one",
+                    loginName.contains("\"name\":\"Ayse Yilmaz\""));
+
             section("Authentication");
             String bad = rpc(out, in, "{\"requestId\":\"2\",\"action\":\"PING\","
                     + "\"username\":\"" + ADMIN_USER + "\",\"password\":\"wrong\"}");
@@ -232,6 +247,160 @@ public class ProtocolTest {
                 rpc(out, in, "{\"requestId\":\"f8\",\"action\":\"DROP_DATABASE\"," + admin()
                         + ",\"database\":\"" + TEST_DB + "\"}");
             }
+
+            section("User management (Ister_0004 / Ister_0005)");
+            String cu2 = rpc(out, in, "{\"requestId\":\"u1\",\"action\":\"CREATE_USER\"," + admin()
+                    + ",\"document\":{\"name\":\"Test Kisi\",\"email\":\"testuser@company.com\","
+                    + "\"password\":\"gecici123\",\"role\":\"user\","
+                    + "\"departments\":[\"Sensor\"],\"permissions\":[\"dataView\"]}}");
+            check("CREATE_USER ok", cu2.contains("testuser@company.com"));
+            String newUserId = extract(cu2, "id");
+
+            String uu = rpc(out, in, "{\"requestId\":\"u2\",\"action\":\"UPDATE_USER\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"},\"document\":{\"name\":\"Yeni Ad\"}}");
+            check("UPDATE_USER changes name", uu.contains("Yeni Ad"));
+
+            String upPerm = rpc(out, in, "{\"requestId\":\"u3\",\"action\":\"UPDATE_USER_PERMISSIONS\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"},"
+                    + "\"document\":{\"permissions\":[\"dataView\",\"dataCreate\"]}}");
+            check("UPDATE_USER_PERMISSIONS applies", upPerm.contains("dataCreate"));
+
+            String rp = rpc(out, in, "{\"requestId\":\"u4\",\"action\":\"RESET_USER_PASSWORD\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"},\"document\":{\"password\":\"yeniSifre1\"}}");
+            check("RESET_USER_PASSWORD ok", rp.contains("\"status\":\"OK\""));
+            String relogin = rpc(out, in, "{\"requestId\":\"u5\",\"action\":\"LOGIN\","
+                    + "\"username\":\"testuser@company.com\",\"password\":\"yeniSifre1\"}");
+            check("login works with new password", relogin.contains("\"status\":\"OK\""));
+
+            String du = rpc(out, in, "{\"requestId\":\"u6\",\"action\":\"DELETE_USER\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"}}");
+            check("DELETE_USER marks as deleted", du.contains("\"isDeleted\":true"));
+
+            String lu2 = rpc(out, in, "{\"requestId\":\"u7\",\"action\":\"LIST_USERS\"," + admin() + "}");
+            check("deleted user hidden from list", !lu2.contains("testuser@company.com"));
+
+            String luAll = rpc(out, in, "{\"requestId\":\"u8\",\"action\":\"LIST_USERS\"," + admin()
+                    + ",\"filter\":{\"includeDeleted\":true}}");
+            check("trash view shows deleted user", luAll.contains("testuser@company.com"));
+
+            String ru = rpc(out, in, "{\"requestId\":\"u9\",\"action\":\"RESTORE_USER\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"}}");
+            check("RESTORE_USER brings it back", ru.contains("\"isDeleted\":false"));
+
+            String self = rpc(out, in, "{\"requestId\":\"u10\",\"action\":\"DELETE_USER\"," + admin()
+                    + ",\"filter\":{\"id\":\"user-1\"}}");
+            check("cannot delete own account", self.contains("your own account"));
+
+            String dropU = rpc(out, in, "{\"requestId\":\"u11\",\"action\":\"DROP_USER\"," + admin()
+                    + ",\"filter\":{\"id\":\"" + newUserId + "\"}}");
+            check("DROP_USER removes permanently", dropU.contains("\"status\":\"OK\""));
+
+            section("Audit log");
+            String logs = rpc(out, in, "{\"requestId\":\"a1\",\"action\":\"AUDIT_LOGS\"," + admin() + "}");
+            check("audit log records user actions", logs.contains("userCreated"));
+            check("audit log stores old values", logs.contains("oldValues"));
+
+            String revertible = rpc(out, in, "{\"requestId\":\"a2\",\"action\":\"AUDIT_LOGS\"," + admin()
+                    + ",\"filter\":{\"onlyRevertible\":true}}");
+            check("revertible filter works", revertible.contains("\"isRevertible\":true"));
+
+            String acts = rpc(out, in, "{\"requestId\":\"a3\",\"action\":\"RECENT_ACTIVITIES\"," + admin()
+                    + ",\"filter\":{\"limit\":5}}");
+            check("RECENT_ACTIVITIES returns activities", acts.contains("occurredAt"));
+
+            section("Data format validation (Ister_0014)");
+            String badType = rpc(out, in, "{\"requestId\":\"v1\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"" + TEST_DB + "\",\"collection\":\"test_kayitlar\","
+                    + "\"document\":{\"adet\":\"metin-olmamali\"}}");
+            check("wrong field type is rejected", badType.contains("must be of type int"));
+
+            String good = rpc(out, in, "{\"requestId\":\"v2\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"" + TEST_DB + "\",\"collection\":\"test_kayitlar\","
+                    + "\"document\":{\"baslik\":\"uc\",\"adet\":3}}");
+            check("correct field types accepted", good.contains("1 record inserted"));
+
+            String free = rpc(out, in, "{\"requestId\":\"v3\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"semasiz\",\"collection\":\"serbest\","
+                    + "\"document\":{\"herhangi\":\"deger\"}}");
+            check("collections without schema stay free", free.contains("1 record inserted"));
+
+            section("Field (feature) type definitions");
+            rpc(out, in, "{\"requestId\":\"d0\",\"action\":\"CREATE_DATABASE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"document\":{}}");
+
+            String cc2 = rpc(out, in, "{\"requestId\":\"d1\",\"action\":\"CREATE_COLLECTION\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"fields\":[{\"name\":\"oda\",\"type\":\"int\"},"
+                    + "{\"name\":\"ad\",\"type\":\"string\"}]}}");
+            check("CREATE_COLLECTION accepts field types", cc2.contains("\"type\":\"int\""));
+
+            String df = rpc(out, in, "{\"requestId\":\"d2\",\"action\":\"DEFINE_FIELDS\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"fields\":[{\"name\":\"aktif\",\"type\":\"boolean\"}]}}");
+            check("DEFINE_FIELDS adds a new field", df.contains("aktif"));
+            check("existing fields are preserved", df.contains("oda") && df.contains("ad"));
+
+            String single = rpc(out, in, "{\"requestId\":\"d3\",\"action\":\"DEFINE_FIELDS\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"name\":\"metrekare\",\"type\":\"double\"}}");
+            check("single field form works", single.contains("metrekare"));
+
+            String okWrite = rpc(out, in, "{\"requestId\":\"d4\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"oda\":3,\"ad\":\"Salon\",\"aktif\":true}}");
+            check("matching types accepted", okWrite.contains("1 record inserted"));
+
+            String badWrite = rpc(out, in, "{\"requestId\":\"d5\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\",\"document\":{\"oda\":\"5\"}}");
+            check("mismatching type rejected", badWrite.contains("must be of type int"));
+
+            String retype = rpc(out, in, "{\"requestId\":\"d6\",\"action\":\"DEFINE_FIELDS\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"name\":\"oda\",\"type\":\"string\"}}");
+            check("field type can be corrected", retype.contains("\"status\":\"OK\""));
+            String afterRetype = rpc(out, in, "{\"requestId\":\"d7\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\",\"document\":{\"oda\":\"5\"}}");
+            check("new type takes effect", afterRetype.contains("1 record inserted"));
+
+            String delField = rpc(out, in, "{\"requestId\":\"d8\",\"action\":\"DELETE_FIELD\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\",\"document\":{\"name\":\"metrekare\"}}");
+            check("DELETE_FIELD removes definition", !delField.contains("metrekare\",\"type"));
+
+            String badFieldType = rpc(out, in, "{\"requestId\":\"d9\",\"action\":\"DEFINE_FIELDS\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"odalar\","
+                    + "\"document\":{\"name\":\"x\",\"type\":\"sayisal\"}}");
+            check("unsupported type rejected", badFieldType.contains("Unsupported field type"));
+
+            section("Automatic type learning");
+            String firstWrite = rpc(out, in, "{\"requestId\":\"e1\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"serbest\","
+                    + "\"document\":{\"sicaklik\":22}}");
+            check("first write succeeds", firstWrite.contains("1 record inserted"));
+
+            String learned = rpc(out, in, "{\"requestId\":\"e2\",\"action\":\"DESCRIBE_COLLECTION\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"serbest\"}");
+            check("type is learned from first write", learned.contains("\"sicaklik\"")
+                    && learned.contains("\"int\""));
+            check("learned fields are marked", learned.contains("\"inferred\":true"));
+
+            String conflict = rpc(out, in, "{\"requestId\":\"e3\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"tipli_db\",\"collection\":\"serbest\","
+                    + "\"document\":{\"sicaklik\":\"yirmiiki\"}}");
+            check("conflicting type rejected afterwards", conflict.contains("must be of type int"));
+
+            rpc(out, in, "{\"requestId\":\"e4\",\"action\":\"DROP_DATABASE\"," + admin()
+                    + ",\"database\":\"tipli_db\"}");
+
+            section("SYSTEM_STATUS and DELETE_COLLECTION");
+            String ss = rpc(out, in, "{\"requestId\":\"s1\",\"action\":\"SYSTEM_STATUS\"," + admin() + "}");
+            check("SYSTEM_STATUS reports mongo state", ss.contains("isMongoConnected"));
+            check("SYSTEM_STATUS reports api state", ss.contains("isApiOnline"));
+
+            rpc(out, in, "{\"requestId\":\"s2\",\"action\":\"CREATE_COLLECTION\"," + admin()
+                    + ",\"database\":\"" + TEST_DB + "\",\"collection\":\"silinecek\"}");
+            String dc = rpc(out, in, "{\"requestId\":\"s3\",\"action\":\"DELETE_COLLECTION\"," + admin()
+                    + ",\"database\":\"" + TEST_DB + "\",\"collection\":\"silinecek\"}");
+            check("DELETE_COLLECTION works as alias", dc.contains("Collection dropped"));
 
             section("STATS");
             String st = rpc(out, in, "{\"requestId\":\"31\",\"action\":\"STATS\"," + admin() + "}");
