@@ -57,6 +57,8 @@ services:
       PORT: "5150"
       MONGO_URI: "mongodb://mongo:27017"
       MONGO_DB: "dbms"
+      MIDDLEWARE_USER: "arslanbejna@gmail.com"
+      MIDDLEWARE_PASSWORD: "Bejna:2004*"
       # On Yuz'un olusturdugu veritabani talep dosyalarinin klasoru
       # (Ister_0011). Asagidaki volume ile makineden erisilebilir.
       REQUEST_DIR: "/app/db-requests"
