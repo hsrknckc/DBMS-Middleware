@@ -266,10 +266,35 @@ public class Router {
     }
 
     /** Filtreye uyan TUM kayitlari siler. */
+    // private String delete(String rid, User user, Map<String, Object> req) {
+    //     require(user, "dataDelete");
+    //     String col = target(req);
+    //     List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
+    //     int count = 0;
+    //     for (Map<String, Object> rec : matched) {
+    //         Object id = rec.get("id");
+    //         if (id instanceof String sid && store.deleteById(col, sid)) {
+    //             eventBus.publish(new Event("delete", col, Map.of("id", sid)));
+    //             count++;
+    //         }
+    //     }
+    //     // Silinen sayi data icinde de dondurulur; istemci mesaj metnini
+    //     // ayristirmadan sonucu dogrulayabilsin diye.
+    //     return ok(rid, count + " record(s) deleted",
+    //               List.of(Map.of("deletedCount", (long) count)));
+    // }
+
+    /** Filtreye uyan kayitlari siler (Bos/null filtre ile toplu silme engellenmistir). */
     private String delete(String rid, User user, Map<String, Object> req) {
         require(user, "dataDelete");
         String col = target(req);
-        List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
+
+        Map<String, Object> filter = normalizeFilter(req.get("filter"));
+        if (filter == null || filter.isEmpty()) {
+            throw new Invalid("Filter is required for DELETE. Mass deletion with empty filter is not allowed.");
+        }
+
+        List<Map<String, Object>> matched = store.find(col, filter);
         int count = 0;
         for (Map<String, Object> rec : matched) {
             Object id = rec.get("id");
@@ -278,12 +303,10 @@ public class Router {
                 count++;
             }
         }
-        // Silinen sayi data icinde de dondurulur; istemci mesaj metnini
-        // ayristirmadan sonucu dogrulayabilsin diye.
         return ok(rid, count + " record(s) deleted",
                   List.of(Map.of("deletedCount", (long) count)));
     }
-
+    
     /**
      * Veritabani ADLARINI doner (duz string listesi).
      * PROTOKOL.md v1 sozlesmesi geregi bicimi degistirilmemistir;

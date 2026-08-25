@@ -123,6 +123,11 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"sinif\":5}}");
             check("DELETE removes 1 record", del.contains("1 record(s) deleted"));
 
+            String massDel = rpc(out, in, "{\"requestId\":\"del_mass\",\"action\":\"DELETE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{}}");
+            check("DELETE with empty filter is rejected", massDel.contains("\"status\":\"ERROR\"") 
+                && massDel.contains("Mass deletion with empty filter is not allowed"));
+
             section("Filter tolerance (_id alias) and delete count");
             rpc(out, in, "{\"requestId\":\"13a\",\"action\":\"WRITE\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Silinecek\"}}");
