@@ -174,12 +174,7 @@ public class InMemoryStore implements Store {
     }
 
     private boolean matches(Map<String, Object> record, Map<String, Object> filter) {
-        if (filter == null || filter.isEmpty()) return true;
-        for (Map.Entry<String, Object> f : filter.entrySet()) {
-            Object value = record.get(f.getKey());
-            if (value == null || !value.equals(f.getValue())) return false;
-        }
-        return true;
+        return FilterMatcher.matches(record, filter);
     }
 
     @Override

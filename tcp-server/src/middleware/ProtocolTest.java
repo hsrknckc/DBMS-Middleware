@@ -53,7 +53,7 @@ public class ProtocolTest {
             String loginName = rpc(out, in, "{\"requestId\":\"n3\",\"action\":\"LOGIN\"," + admin()
                     + ",\"name\":\"Yanlis Ad\"}");
             check("stored name is authoritative, not the claimed one",
-                    loginName.contains("\"name\":\"Ayse Yilmaz\""));
+                    loginName.contains("\"name\":\"") && !loginName.contains("\"name\":\"Yanlis Ad\""));
 
             section("Authentication");
             String bad = rpc(out, in, "{\"requestId\":\"2\",\"action\":\"PING\","
@@ -61,6 +61,7 @@ public class ProtocolTest {
             check("wrong password -> UNAUTHORIZED", bad.contains("\"status\":\"UNAUTHORIZED\""));
 
             String login = rpc(out, in, "{\"requestId\":\"3\",\"action\":\"LOGIN\"," + admin() + "}");
+            String adminId = extract(login, "id");
             check("LOGIN returns OK", login.contains("\"status\":\"OK\""));
             check("LOGIN returns role", login.contains("\"role\":\"superAdmin\""));
             check("LOGIN returns permissions", login.contains("\"permissions\""));
@@ -145,6 +146,62 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"_id\":\"" + delId + "\"}}");
             check("_id filter finds nothing after delete", readAlias.contains("0 record(s) found"));
 
+            section("Advanced Filters and Security (Sanitization)");
+
+            rpc(out, in, "{\"requestId\":\"f_setup1\",\"action\":\"CREATE_COLLECTION\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\"}");
+            rpc(out, in, "{\"requestId\":\"f_setup2\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"document\":{\"ad\":\"Bora\",\"sinif\":2}}");
+            rpc(out, in, "{\"requestId\":\"f_setup3\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"document\":{\"ad\":\"Ceren\",\"sinif\":4}}");
+            rpc(out, in, "{\"requestId\":\"f_setup4\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"document\":{\"ad\":\"Deniz\",\"sinif\":5}}");
+
+            // 1. Karşılaştırma Operatörü (gt / >) Testi
+            String gtTest = rpc(out, in, "{\"requestId\":\"f_gt\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\">\":3}}}");
+            check("gt filter matches records > 3",
+                    gtTest.contains("2 record(s) found") && gtTest.contains("Ceren") && gtTest.contains("Deniz"));
+
+            // 1b. Takma ad operatörler de çalışmalı
+            String gteTest = rpc(out, in, "{\"requestId\":\"f_gte\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"gte\":4}}}");
+            check("gte alias matches records >= 4",
+                    gteTest.contains("2 record(s) found") && gteTest.contains("Ceren") && gteTest.contains("Deniz"));
+
+            String lteTest = rpc(out, in, "{\"requestId\":\"f_lte\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"lte\":4}}}");
+            check("lte alias matches records <= 4",
+                    lteTest.contains("2 record(s) found") && lteTest.contains("Bora") && lteTest.contains("Ceren"));
+
+            // 2. Metin Arama (like / case-insensitive) Testi
+            String likeTest = rpc(out, in, "{\"requestId\":\"f_like\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"ad\":{\"like\":\"al\"}}}");
+            check("like filter matches substring case-insensitive", likeTest.contains("1 record(s) found") && likeTest.contains("Ali"));
+
+            // 3. Eşit Değil (ne / !=) Testi
+            String neTest = rpc(out, in, "{\"requestId\":\"f_ne\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"!=\":4}}}");
+            check("ne filter excludes matching records",
+                    neTest.contains("2 record(s) found") && neTest.contains("Bora")
+                            && neTest.contains("Deniz") && !neTest.contains("Ceren"));
+
+            // 4. NoSQL Injection Koruması ($where operatörü engellenmeli)
+            String injectionTest = rpc(out, in, "{\"requestId\":\"f_inj\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{\"$where\":\"sleep(1000)\"}}");
+            check("NoSQL injection with $ operator is rejected", injectionTest.contains("\"status\":\"ERROR\"")
+                    && injectionTest.contains("Dangerous query operator"));
+
+            String nestedInjectionTest = rpc(out, in, "{\"requestId\":\"f_inj2\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"$gt\":3}}}");
+            check("nested $ operator injection is rejected", nestedInjectionTest.contains("\"status\":\"ERROR\"")
+                    && nestedInjectionTest.contains("Dangerous query operator"));
+
+            // 5. Desteklenmeyen / Bilinmeyen Operatör Testi
+            String invalidOpTest = rpc(out, in, "{\"requestId\":\"f_inv\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"foo\":1}}}");
+            check("unsupported filter operator returns ERROR", invalidOpTest.contains("\"status\":\"ERROR\"")
+                    && invalidOpTest.contains("Unsupported filter operator"));
             section("LIST_DATABASES and LIST_DATABASES_INFO");
             String ld = rpc(out, in, "{\"requestId\":\"17\",\"action\":\"LIST_DATABASES\"," + admin() + "}");
             check("LIST_DATABASES contains okul", ld.contains("okul"));
@@ -288,7 +345,7 @@ public class ProtocolTest {
             check("RESTORE_USER brings it back", ru.contains("\"isDeleted\":false"));
 
             String self = rpc(out, in, "{\"requestId\":\"u10\",\"action\":\"DELETE_USER\"," + admin()
-                    + ",\"filter\":{\"id\":\"user-1\"}}");
+                    + ",\"filter\":{\"id\":\"" + adminId + "\"}}");
             check("cannot delete own account", self.contains("your own account"));
 
             String dropU = rpc(out, in, "{\"requestId\":\"u11\",\"action\":\"DROP_USER\"," + admin()

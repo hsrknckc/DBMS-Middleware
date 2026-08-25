@@ -13,6 +13,7 @@ import middleware.events.EventBus;
 import middleware.audit.AuditService;
 import middleware.file.RequestFileService;
 import middleware.validation.SchemaValidator;
+import middleware.validation.FilterSanitizer;
 import middleware.server.ClientSession;
 import middleware.storage.Store;
 
@@ -200,11 +201,28 @@ public class Router {
         return error(rid, "Database is not reachable");
     }
 
+    // /** Ister_0016: filtreye uyan kayitlari doner. */
+    // private String read(String rid, User user, Map<String, Object> req) {
+    //     require(user, "dataView");
+    //     String col = target(req);
+    //     List<Map<String, Object>> records = store.find(col, normalizeFilter(req.get("filter")));
+    //     return ok(rid, records.size() + " record(s) found", records);
+    // }
+
     /** Ister_0016: filtreye uyan kayitlari doner. */
     private String read(String rid, User user, Map<String, Object> req) {
         require(user, "dataView");
         String col = target(req);
-        List<Map<String, Object>> records = store.find(col, normalizeFilter(req.get("filter")));
+        Map<String, Object> filter = normalizeFilter(req.get("filter"));
+
+        // GUVENLIK KONTROLU: Zararli operatorleri filtrele
+        try {
+            FilterSanitizer.validate(filter);
+        } catch (IllegalArgumentException e) {
+            throw new Invalid(e.getMessage());
+        }
+
+        List<Map<String, Object>> records = store.find(col, filter);
         return ok(rid, records.size() + " record(s) found", records);
     }
 
@@ -1217,9 +1235,28 @@ public class Router {
      *
      * Ornek: {"id":"rec-8","_id":"rec-8"} -> {"id":"rec-8"}
      */
+    // private static Map<String, Object> normalizeFilter(Object raw) {
+    //     Map<String, Object> filter = mapOrNull(raw);
+    //     if (filter == null || !filter.containsKey("_id")) return filter;
+
+    //     Map<String, Object> normalized = new LinkedHashMap<>(filter);
+    //     Object underscoreId = normalized.remove("_id");
+    //     normalized.putIfAbsent("id", underscoreId);
+    //     return normalized;
+    // }
+
     private static Map<String, Object> normalizeFilter(Object raw) {
         Map<String, Object> filter = mapOrNull(raw);
-        if (filter == null || !filter.containsKey("_id")) return filter;
+        if (filter == null) return null;
+
+        // GUVENLIK KONTROLU: READ, UPDATE, DELETE ortak korumasi
+        try {
+            FilterSanitizer.validate(filter);
+        } catch (IllegalArgumentException e) {
+            throw new Invalid(e.getMessage());
+        }
+
+        if (!filter.containsKey("_id")) return filter;
 
         Map<String, Object> normalized = new LinkedHashMap<>(filter);
         Object underscoreId = normalized.remove("_id");

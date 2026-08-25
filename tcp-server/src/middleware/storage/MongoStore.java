@@ -126,10 +126,18 @@ public class MongoStore implements Store {
         return client.getDatabase(databaseOf(name)).getCollection(collectionOf(name));
     }
 
+    // /** Filtre Map'ini Mongo sorgusuna cevirir; bos/null ise tum belgeler. */
+    // private static Document query(Map<String, Object> filter) {
+    //     return (filter == null || filter.isEmpty()) ? new Document() : new Document(filter);
+    // }
+
     /** Filtre Map'ini Mongo sorgusuna cevirir; bos/null ise tum belgeler. */
     private static Document query(Map<String, Object> filter) {
-        return (filter == null || filter.isEmpty()) ? new Document() : new Document(filter);
+        return MongoQueryBuilder.buildQuery(filter);
     }
+    // 1. **Tam Güvenlik:** Dışarıdan gelen `$` işaretli enjeksiyonlar `FilterSanitizer` tarafından engellenmeye devam eder; MongoDB `$` operatörlerini sadece bizim güvenli dönüştürücümüz (`MongoQueryBuilder`) içeride güvenle üretir.
+    // 2. **ReDoS Koruması:** `like` / `contains` aramalarında `Pattern.quote` kullanarak kötü niyetli karmaşık regex saldırılarını etkisiz hale getirdik.
+    // 3. **Zengin Sorgulama:** Artık Frontend ve Backend, sayısal aralıklar (`>`, `<`), hariç tutmalar (`!=`) ve metin içi aramalar (`like`) yapabilir hale geldi.
 
     /** Belgeyi duz Map'e cevirir (_id zaten projeksiyonla dislanmistir). */
     private static Map<String, Object> toMap(Document doc) {
