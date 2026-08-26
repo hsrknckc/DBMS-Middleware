@@ -285,8 +285,13 @@ public class Router {
 
     /** Ister_0016: Gelismis filtreleme, siralama ve sayfalama ile kayitlari doner. */
     private String read(String rid, User user, Map<String, Object> req) {
-        require(user, "dataView");
-        String col = target(req);
+        String db = databaseName(req);
+        String collection = str(req, "collection");
+        if (collection == null) throw new Invalid("collection field is required");
+
+        requireCollection(user, db, collection, "dataView");
+
+        String col = Store.key(db, collection);
         Map<String, Object> filter = normalizeFilter(req.get("filter"));
         // GUVENLIK KONTROLU: Zararli operatorleri filtrele
         try {
@@ -1397,17 +1402,30 @@ private String delete(String rid, User user, Map<String, Object> req) {
      *
      * "records" istege baglidir; verilirse baslangic kayitlari eklenir.
      */
+        private String importFile(String rid, User user, Map<String, Object> req) {
+        String path = filePath(req);
+
+        if (files.isUserFile(path)) {
+            return importUserFile(rid, user, path);
+        }
+
+        if (files.isDatabaseFile(path)) {
+            return importDatabaseFile(rid, user, path);
+        }
+
+        throw new Invalid("File name must start with user_ or database_");
+    }
+
     @SuppressWarnings("unchecked")
-    private String importFile(String rid, User user, Map<String, Object> req) {
+    private String importDatabaseFile(String rid, User user, String path) {
         require(user, "databaseCreate");
 
-        Map<String, Object> content = files.readJson(filePath(req));
+        Map<String, Object> content = files.readJson(path);
 
         String dbName = str(content, "database");
         if (dbName == null) throw new Invalid("File must contain a 'database' field");
         if (META_DB.equals(dbName)) throw new Invalid("Reserved database name: " + META_DB);
 
-        // 1) Veritabani ust verisi (yoksa olustur)
         Map<String, Object> meta = findDatabaseMeta(dbName);
         if (meta == null) {
             Map<String, Object> data = new LinkedHashMap<>();
@@ -1420,7 +1438,6 @@ private String delete(String rid, User user, Map<String, Object> req) {
             eventBus.publish(new Event("insert", META_DATABASES, meta));
         }
 
-        // 2) Koleksiyonlar, alan tanimlari ve baslangic kayitlari
         List<String> createdCollections = new ArrayList<>();
         long insertedRecords = 0;
 
@@ -1439,14 +1456,11 @@ private String delete(String rid, User user, Map<String, Object> req) {
                             Map.of("collection", colName)));
                 }
 
-                // Alan tanimlarini sakla (Ister_0012'nin "alan yaratma" karsiligi;
-                // MongoDB semasiz oldugu icin tanimlar ust veride tutulur)
                 Object fields = col.get("fields");
                 if (fields instanceof List) {
                     saveSchema(dbName, colName, (List<Object>) fields);
                 }
 
-                // Baslangic kayitlari
                 Object recs = col.get("records");
                 if (recs instanceof List<?> list) {
                     for (Object rec : list) {
@@ -1466,7 +1480,67 @@ private String delete(String rid, User user, Map<String, Object> req) {
         summary.put("collectionsCreated", createdCollections);
         summary.put("collectionCount", (long) createdCollections.size());
         summary.put("recordsInserted", insertedRecords);
-        return ok(rid, "Import completed: " + dbName, List.of(summary));
+
+        return ok(rid, "Database import completed: " + dbName, List.of(summary));
+    }
+
+    @SuppressWarnings("unchecked")
+    private String importUserFile(String rid, User admin, String path) {
+        requireSuperAdmin(admin);
+
+        Map<String, Object> content = files.readJson(path);
+        List<Object> rawUsers = new ArrayList<>();
+
+        Object usersValue = content.get("users");
+        if (usersValue instanceof List<?> list) {
+            rawUsers.addAll(list);
+        } else {
+            rawUsers.add(content);
+        }
+
+        List<Object> imported = new ArrayList<>();
+
+        for (Object item : rawUsers) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                throw new Invalid("Each user entry must be an object");
+            }
+
+            Map<String, Object> doc = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                if (entry.getKey() != null) {
+                    doc.put(entry.getKey().toString(), entry.getValue());
+                }
+            }
+
+            String email = str(doc, "email");
+            if (email == null) throw new Invalid("User file entry must contain email");
+
+            User created = new User(
+                    auth.newUserId(),
+                    strOr(doc, "name", ""),
+                    email,
+                    strOr(doc, "password", "changeme"),
+                    strOr(doc, "role", "user"),
+                    stringSet(doc.get("departments")),
+                    stringSet(doc.get("permissions")),
+                    stringListMap(doc.get("allowedCollections")),
+                    permissionMap(doc.get("databasePermissions")),
+                    permissionMap(doc.get("collectionPermissions"))
+            );
+
+            if (!auth.createUser(created)) {
+                throw new Invalid("Email already exists: " + email);
+            }
+
+            audit.record("userImported", admin.id(), admin.name(),
+                    created.id(), created.name(),
+                    "Kullanici dosyadan ice aktarildi: " + email,
+                    Map.of(), created.toPublicMap(), false);
+
+            imported.add(created.toPublicMap());
+        }
+
+        return ok(rid, imported.size() + " user(s) imported", imported);
     }
 
     /**
