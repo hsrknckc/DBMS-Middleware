@@ -136,7 +136,6 @@ public class ProtocolTest {
                 && massUp.contains("Mass update with empty filter is not allowed"));
 
             section("Filter tolerance (_id alias) and delete count");
-            section("Filter tolerance (_id alias) and delete count");
             rpc(out, in, "{\"requestId\":\"13a\",\"action\":\"WRITE\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Silinecek\"}}");
             String toDelete = rpc(out, in, "{\"requestId\":\"13b\",\"action\":\"READ\"," + admin()
@@ -170,6 +169,66 @@ public class ProtocolTest {
             rpc(out, in, "{\"requestId\":\"f_setup4\",\"action\":\"WRITE\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"document\":{\"ad\":\"Deniz\",\"sinif\":5}}");
 
+            // 10. IN bos liste
+String inEmpty = rpc(out, in,
+        "{\"requestId\":\"f_in_empty\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"filter\":{\"sinif\":{\"in\":[]}}}");
+
+check("in with empty list is rejected or returns no records",
+        inEmpty.contains("\"status\":\"ERROR\"")
+        || inEmpty.contains("0 record(s) found"));
+
+
+// 11. BETWEEN ters aralik
+String betweenInvalid = rpc(out, in,
+        "{\"requestId\":\"f_btw_invalid\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"filter\":{\"sinif\":{\"between\":[5,3]}}}");
+
+check("between with reversed range is rejected or returns no records",
+        betweenInvalid.contains("\"status\":\"ERROR\"")
+        || betweenInvalid.contains("0 record(s) found"));
+
+
+// 12. Negatif limit
+String negativeLimit = rpc(out, in,
+        "{\"requestId\":\"f_limit_negative\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"limit\":-1}");
+
+check("negative limit is rejected",
+        negativeLimit.contains("\"status\":\"ERROR\""));
+
+
+// 13. Negatif skip
+String negativeSkip = rpc(out, in,
+        "{\"requestId\":\"f_skip_negative\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"skip\":-1}");
+
+check("negative skip is rejected",
+        negativeSkip.contains("\"status\":\"ERROR\""));
+
+
+// 14. Geçersiz sort yönü
+String invalidSort = rpc(out, in,
+        "{\"requestId\":\"f_sort_invalid\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"sort\":{\"sinif\":\"hacked\"}}");
+
+check("invalid sort order is rejected",
+        invalidSort.contains("\"status\":\"ERROR\""));
+
+
+// 15. Aşırı büyük limit
+String hugeLimit = rpc(out, in,
+        "{\"requestId\":\"f_limit_huge\",\"action\":\"READ\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\","
+        + "\"limit\":999999999}");
+
+check("excessive limit is rejected",
+        hugeLimit.contains("\"status\":\"ERROR\""));
             // 1. Karşılaştırma Operatörü (gt / >) Testi
             String gtTest = rpc(out, in, "{\"requestId\":\"f_gt\",\"action\":\"READ\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\">\":3}}}");
@@ -215,6 +274,39 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"foo\":1}}}");
             check("unsupported filter operator returns ERROR", invalidOpTest.contains("\"status\":\"ERROR\"")
                     && invalidOpTest.contains("Unsupported filter operator"));
+            // 6. IN ve NIN Operatör Testleri
+            String inTest = rpc(out, in, "{\"requestId\":\"f_in\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"in\":[2, 5]}}}");
+            check("in operator matches specified values", inTest.contains("2 record(s) found") 
+                    && inTest.contains("Bora") && inTest.contains("Deniz") && !inTest.contains("Ceren"));
+
+            String ninTest = rpc(out, in, "{\"requestId\":\"f_nin\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"nin\":[2, 5]}}}");
+            check("nin operator excludes specified values", ninTest.contains("1 record(s) found") 
+                    && ninTest.contains("Ceren"));
+
+            // 7. BETWEEN Operatör Testi
+            String betweenTest = rpc(out, in, "{\"requestId\":\"f_btw\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"filter\":{\"sinif\":{\"between\":[3, 5]}}}");
+            check("between operator matches inclusive range", betweenTest.contains("2 record(s) found") 
+                    && betweenTest.contains("Ceren") && betweenTest.contains("Deniz"));
+
+            // 8. SIRALAMA (Sort) Testi
+            String sortAsc = rpc(out, in, "{\"requestId\":\"f_sort_asc\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"sort\":{\"sinif\":\"asc\"}}");
+            check("sort ascending works", sortAsc.indexOf("Bora") < sortAsc.indexOf("Ceren") 
+                    && sortAsc.indexOf("Ceren") < sortAsc.indexOf("Deniz"));
+
+            String sortDesc = rpc(out, in, "{\"requestId\":\"f_sort_desc\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"sort\":{\"sinif\":\"desc\"}}");
+            check("sort descending works", sortDesc.indexOf("Deniz") < sortDesc.indexOf("Ceren") 
+                    && sortDesc.indexOf("Ceren") < sortDesc.indexOf("Bora"));
+
+            // 9. SAYFALAMA (Limit & Skip) Testi
+            String pageTest = rpc(out, in, "{\"requestId\":\"f_page\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"filtre_testleri\",\"sort\":{\"sinif\":\"asc\"},\"skip\":1,\"limit\":1}");
+            check("skip and limit returns exact page slice", pageTest.contains("1 record(s) found") 
+                    && pageTest.contains("Ceren") && !pageTest.contains("Bora") && !pageTest.contains("Deniz"));
             section("LIST_DATABASES and LIST_DATABASES_INFO");
             String ld = rpc(out, in, "{\"requestId\":\"17\",\"action\":\"LIST_DATABASES\"," + admin() + "}");
             check("LIST_DATABASES contains okul", ld.contains("okul"));

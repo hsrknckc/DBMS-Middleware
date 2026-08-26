@@ -214,22 +214,68 @@ public class Router {
     // }
 
     /** Ister_0016: filtreye uyan kayitlari doner. */
+    private static final int MAX_READ_LIMIT = 1000;
+
+    /** Ister_0016: Gelismis filtreleme, siralama ve sayfalama ile kayitlari doner. */
     private String read(String rid, User user, Map<String, Object> req) {
         require(user, "dataView");
         String col = target(req);
         Map<String, Object> filter = normalizeFilter(req.get("filter"));
-
         // GUVENLIK KONTROLU: Zararli operatorleri filtrele
         try {
             FilterSanitizer.validate(filter);
         } catch (IllegalArgumentException e) {
             throw new Invalid(e.getMessage());
         }
+        List<Map<String, Object>> records = new ArrayList<>(store.find(col, filter));
+        // 1. SIRALAMA (sort) KONTROLU & YON DOGRULAMASI
+        Map<String, Object> sortDoc = mapOrNull(req.get("sort"));
+        if (sortDoc != null && !sortDoc.isEmpty()) {
+            for (Map.Entry<String, Object> sortEntry : sortDoc.entrySet()) {
+                String sortField = sortEntry.getKey();
+                if (sortField.startsWith("$")) {
+                    throw new Invalid("Invalid sort field name: " + sortField);
+                }
+                String dirStr = String.valueOf(sortEntry.getValue()).toLowerCase().trim();
+                boolean ascending;
+                if (dirStr.equals("asc") || dirStr.equals("1")) {
+                    ascending = true;
+                } else if (dirStr.equals("desc") || dirStr.equals("-1")) {
+                    ascending = false;
+                } else {
+                    throw new Invalid("Invalid sort direction: " + dirStr + " (expected: 'asc', 'desc', '1', '-1')");
+                }
 
-        List<Map<String, Object>> records = store.find(col, filter);
+                records.sort((a, b) -> {
+                    Object valA = a.get(sortField);
+                    Object valB = b.get(sortField);
+                    int cmp = compareValues(valA, valB);
+                    return ascending ? cmp : -cmp;
+                });
+            }
+        }
+        // 2. SAYFALAMA: SKIP / OFFSET
+        int skip = intOr(req.get("skip"), intOr(req.get("offset"), 0));
+        if (skip < 0) throw new Invalid("skip/offset parameter cannot be negative");
+
+        // 3. SAYFALAMA: LIMIT (Asiri limit reddedilir)
+        Integer explicitLimit = req.containsKey("limit") ? intOr(req.get("limit"), MAX_READ_LIMIT) : null;
+        if (explicitLimit != null) {
+            if (explicitLimit < 0) throw new Invalid("limit parameter cannot be negative");
+            if (explicitLimit > MAX_READ_LIMIT) {
+                throw new Invalid("Limit exceeds maximum allowed value of " + MAX_READ_LIMIT);
+            }
+        }
+        // Sayfalama Dilimi
+        if (skip > 0 || explicitLimit != null) {
+            int fromIndex = Math.min(skip, records.size());
+            int toIndex = explicitLimit != null ? Math.min(fromIndex + explicitLimit, records.size()) : records.size();
+            records = new ArrayList<>(records.subList(fromIndex, toIndex));
+        }
+
         return ok(rid, records.size() + " record(s) found", records);
     }
-    
+
 private String write(String rid, User user, Map<String, Object> req) {
     String db = databaseName(req);
     String collection = str(req, "collection");
@@ -1601,6 +1647,17 @@ private static Map<String, Set<String>> permissionMap(Object o) {
         m.put("message", message);
         m.put("data", data);
         return Json.stringify(m);
+    }
+
+    private static int compareValues(Object actual, Object expected) {
+        if (actual == null && expected == null) return 0;
+        if (actual == null) return -1;
+        if (expected == null) return 1;
+
+        if (actual instanceof Number actualNumber && expected instanceof Number expectedNumber) {
+            return Double.compare(actualNumber.doubleValue(), expectedNumber.doubleValue());
+        }
+        return String.valueOf(actual).compareToIgnoreCase(String.valueOf(expected));
     }
 
     private static int intOr(Object o, int fallback) {
