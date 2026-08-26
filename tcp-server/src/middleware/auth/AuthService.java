@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-
 import middleware.storage.Store;
 
 /**
@@ -379,59 +378,71 @@ public class AuthService {
      * alanlarini gunceller.
      */
     public User updateUser(
-            String id,
-            String name,
-            String role,
-            Set<String> departments,
-            Set<String> permissions,
-            Boolean isActive
-    ) {
+        String id,
+        String name,
+        String role,
+        Set<String> departments,
+        Set<String> permissions,
+        Map<String, List<String>> allowedCollections,
+        Map<String, Set<String>> databasePermissions,
+        Map<String, Set<String>> collectionPermissions,
+        Boolean isActive
+) {
 
-        User u =
-                usersById.get(id);
+    User u =
+            usersById.get(id);
 
-        if (u == null) {
-            return null;
-        }
-
-        u.setName(name);
-        u.setRole(role);
-        u.setDepartments(departments);
-        u.setPermissions(permissions);
-
-        if (isActive != null) {
-            u.setActive(isActive);
-        }
-
-        persist(u);
-
-        return u;
+    if (u == null) {
+        return null;
     }
+
+    u.setName(name);
+    u.setRole(role);
+    u.setDepartments(departments);
+    u.setPermissions(permissions);
+    u.setAllowedCollections(allowedCollections);
+    u.setDatabasePermissions(databasePermissions);
+    u.setCollectionPermissions(collectionPermissions);
+
+    if (isActive != null) {
+        u.setActive(isActive);
+    }
+
+    persist(u);
+
+    return u;
+}
 
     /**
      * Ister_0004:
      * Yalnizca departman ve yetkileri gunceller.
      */
     public User updatePermissions(
-            String id,
-            Set<String> departments,
-            Set<String> permissions
-    ) {
+        String id,
+        Set<String> departments,
+        Set<String> permissions,
+        Map<String, List<String>> allowedCollections,
+        Map<String, Set<String>> databasePermissions,
+        Map<String, Set<String>> collectionPermissions
+) {
 
-        User u =
-                usersById.get(id);
+    User u =
+            usersById.get(id);
 
-        if (u == null) {
-            return null;
-        }
-
-        u.setDepartments(departments);
-        u.setPermissions(permissions);
-
-        persist(u);
-
-        return u;
+    if (u == null) {
+        return null;
     }
+
+    u.setDepartments(departments);
+    u.setPermissions(permissions);
+    u.setAllowedCollections(allowedCollections);
+    u.setDatabasePermissions(databasePermissions);
+    u.setCollectionPermissions(collectionPermissions);
+
+    persist(u);
+
+    return u;
+}
 
     /**
      * Yumusak silme:
