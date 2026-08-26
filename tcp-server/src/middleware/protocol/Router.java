@@ -230,7 +230,6 @@ public class Router {
         return ok(rid, records.size() + " record(s) found", records);
     }
     
-/** Ister_0017: yeni kayit ekler. */
 private String write(String rid, User user, Map<String, Object> req) {
     String db = databaseName(req);
     String collection = str(req, "collection");
@@ -274,131 +273,145 @@ private String write(String rid, User user, Map<String, Object> req) {
     // 5. Kaydi Ekle ve Olay Yayini Yap
     Map<String, Object> inserted = store.insert(col, new LinkedHashMap<>(doc));
     eventBus.publish(new Event("insert", col, inserted));
+
+    // 6. Audit Log Kaydı (WRITE -> oldValues: null, newValues: inserted)
+    String recordId = String.valueOf(inserted.get("id"));
+    audit.recordDataAction(
+            "recordCreated",
+            user.id(), user.name(),
+            db, collection, recordId,
+            "Created record in " + db + "/" + collection,
+            null,
+            inserted,
+            true
+    );
+
     return ok(rid, "1 record inserted", List.of(inserted));
 }
 
-    /** Filtreye uyan kayitlari guvenle gunceller; limit asiminda hicbir kayda dokunmaz. */
-    private String update(String rid, User user, Map<String, Object> req) {
-        String db = databaseName(req);
-String collection = str(req, "collection");
-if (collection == null) throw new Invalid("collection field is required");
+/** Filtreye uyan kayitlari guvenle gunceller; limit asiminda hicbir kayda dokunmaz. */
+private String update(String rid, User user, Map<String, Object> req) {
+    String db = databaseName(req);
+    String collection = str(req, "collection");
+    if (collection == null) throw new Invalid("collection field is required");
 
-requireCollection(user, db, collection, "dataUpdate");
+    requireCollection(user, db, collection, "dataUpdate");
 
-String col = Store.key(db, collection);
+    String col = Store.key(db, collection);
 
-        // 1. Dokuman Dogrulamasi
-        Map<String, Object> doc = mapOrNull(req.get("document"));
-        if (doc == null || doc.isEmpty()) {
-            throw new Invalid("document field must be a non-empty object");
-        }
+    // 1. Dokuman Dogrulamasi
+    Map<String, Object> doc = mapOrNull(req.get("document"));
+    if (doc == null || doc.isEmpty()) {
+        throw new Invalid("document field must be a non-empty object");
+    }
 
-        // 2. SISTEM ALANLARI KORUMASI (Immutable Fields)
-        if (doc.containsKey("id") || doc.containsKey("_id")) {
-            throw new Invalid("Field 'id' cannot be updated");
-        }
-        if (doc.containsKey("createdAt")) {
-            throw new Invalid("Field 'createdAt' cannot be updated");
-        }
-        if (doc.containsKey("updatedAt")) {
-            throw new Invalid("Field 'updatedAt' is managed by server and cannot be updated");
-        }
+    // 2. SISTEM ALANLARI KORUMASI (Immutable Fields)
+    if (doc.containsKey("id") || doc.containsKey("_id")) {
+        throw new Invalid("Field 'id' cannot be updated");
+    }
+    if (doc.containsKey("createdAt")) {
+        throw new Invalid("Field 'createdAt' cannot be updated");
+    }
+    if (doc.containsKey("updatedAt")) {
+        throw new Invalid("Field 'updatedAt' is managed by server and cannot be updated");
+    }
 
-        // 3. Bos Filtre Kalkani
-        Map<String, Object> filter = normalizeFilter(req.get("filter"));
-        if (filter == null || filter.isEmpty()) {
-            throw new Invalid("Filter is required for UPDATE. Mass update with empty filter is not allowed.");
-        }
+    // 3. Bos Filtre Kalkani
+    Map<String, Object> filter = normalizeFilter(req.get("filter"));
+    if (filter == null || filter.isEmpty()) {
+        throw new Invalid("Filter is required for UPDATE. Mass update with empty filter is not allowed.");
+    }
 
-        // 4. Sema Uyumluluk Kontrolu
-        validateAgainstSchema(db, collection, doc);
+    // 4. Sema Uyumluluk Kontrolu
+    validateAgainstSchema(db, collection, doc);
 
-        // 5. Eslestir ve Limit Kontrolu Yap (Fail-Fast)
-        List<Map<String, Object>> matched = store.find(col, filter);
-        if (matched.isEmpty()) {
-            return ok(rid, "0 record(s) updated", List.of());
-        }
+    // 5. Eslestir ve Limit Kontrolu Yap (Fail-Fast)
+    List<Map<String, Object>> matched = store.find(col, filter);
+    if (matched.isEmpty()) {
+        return ok(rid, "0 record(s) updated", List.of());
+    }
 
-        if (matched.size() > MAX_UPDATE_BATCH) {
-            throw new Invalid("Update affects too many records (" + matched.size() 
-                    + "). Maximum allowed: " + MAX_UPDATE_BATCH);
-        }
+    if (matched.size() > MAX_UPDATE_BATCH) {
+        throw new Invalid("Update affects too many records (" + matched.size() 
+                + "). Maximum allowed: " + MAX_UPDATE_BATCH);
+    }
 
-        // 6. Guncellemeleri Calistir (Hata durumunda geri alma korumasiyla)
-        List<Map<String, Object>> updated = new ArrayList<>();
-        List<Map<String, Object>> rollbackList = new ArrayList<>();
+    // 6. Guncellemeleri Calistir (Hata durumunda geri alma korumasiyla)
+    List<Map<String, Object>> updated = new ArrayList<>();
+    List<Map<String, Object>> rollbackList = new ArrayList<>();
 
-        try {
-            for (Map<String, Object> oldRec : matched) {
-                Object id = oldRec.get("id");
-                if (id instanceof String sid) {
-                    rollbackList.add(new LinkedHashMap<>(oldRec));
+    try {
+        for (Map<String, Object> oldRec : matched) {
+            Object id = oldRec.get("id");
+            if (id instanceof String sid) {
+                rollbackList.add(new LinkedHashMap<>(oldRec));
 
-                    Map<String, Object> u = store.updateById(col, sid, doc);
-                    if (u != null) {
-                        eventBus.publish(new Event("update", col, u));
-                        updated.add(u);
-                    }
+                Map<String, Object> u = store.updateById(col, sid, doc);
+                if (u != null) {
+                    eventBus.publish(new Event("update", col, u));
+                    updated.add(u);
+
+                    // Audit Log Kaydı (UPDATE -> oldValues: oldRec, newValues: u)
+                    audit.recordDataAction(
+                            "recordUpdated",
+                            user.id(), user.name(),
+                            db, collection, sid,
+                            "Updated record " + sid + " in " + db + "/" + collection,
+                            new LinkedHashMap<>(oldRec),
+                            u,
+                            true
+                    );
                 }
             }
-        } catch (Exception e) {
-            for (Map<String, Object> oldRec : rollbackList) {
-                String sid = (String) oldRec.get("id");
-                store.updateById(col, sid, oldRec);
-            }
-            throw new Invalid("Update failed during execution, rolled back changes: " + e.getMessage());
         }
-
-        return ok(rid, updated.size() + " record(s) updated", updated);
+    } catch (Exception e) {
+        for (Map<String, Object> oldRec : rollbackList) {
+            String sid = (String) oldRec.get("id");
+            store.updateById(col, sid, oldRec);
+        }
+        throw new Invalid("Update failed during execution, rolled back changes: " + e.getMessage());
     }
 
-    /** Filtreye uyan TUM kayitlari siler. */
-    // private String delete(String rid, User user, Map<String, Object> req) {
-    //     require(user, "dataDelete");
-    //     String col = target(req);
-    //     List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
-    //     int count = 0;
-    //     for (Map<String, Object> rec : matched) {
-    //         Object id = rec.get("id");
-    //         if (id instanceof String sid && store.deleteById(col, sid)) {
-    //             eventBus.publish(new Event("delete", col, Map.of("id", sid)));
-    //             count++;
-    //         }
-    //     }
-    //     // Silinen sayi data icinde de dondurulur; istemci mesaj metnini
-    //     // ayristirmadan sonucu dogrulayabilsin diye.
-    //     return ok(rid, count + " record(s) deleted",
-    //               List.of(Map.of("deletedCount", (long) count)));
-    // }
+    return ok(rid, updated.size() + " record(s) updated", updated);
+}
 
-    /** Filtreye uyan kayitlari siler (Bos/null filtre ile toplu silme engellenmistir). */
-    private String delete(String rid, User user, Map<String, Object> req) {
-        String db = databaseName(req);
-String collection = str(req, "collection");
-if (collection == null) throw new Invalid("collection field is required");
+private String delete(String rid, User user, Map<String, Object> req) {
+    String db = databaseName(req);
+    String collection = str(req, "collection");
+    if (collection == null) throw new Invalid("collection field is required");
 
-requireCollection(user, db, collection, "dataDelete");
+    requireCollection(user, db, collection, "dataDelete");
 
-String col = Store.key(db, collection);
+    String col = Store.key(db, collection);
 
-        Map<String, Object> filter = normalizeFilter(req.get("filter"));
-        if (filter == null || filter.isEmpty()) {
-            throw new Invalid("Filter is required for DELETE. Mass deletion with empty filter is not allowed.");
-        }
-
-        List<Map<String, Object>> matched = store.find(col, filter);
-        int count = 0;
-        for (Map<String, Object> rec : matched) {
-            Object id = rec.get("id");
-            if (id instanceof String sid && store.deleteById(col, sid)) {
-                eventBus.publish(new Event("delete", col, Map.of("id", sid)));
-                count++;
-            }
-        }
-        return ok(rid, count + " record(s) deleted",
-                  List.of(Map.of("deletedCount", (long) count)));
+    Map<String, Object> filter = normalizeFilter(req.get("filter"));
+    if (filter == null || filter.isEmpty()) {
+        throw new Invalid("Filter is required for DELETE. Mass deletion with empty filter is not allowed.");
     }
-    
+
+    List<Map<String, Object>> matched = store.find(col, filter);
+    int count = 0;
+    for (Map<String, Object> rec : matched) {
+        Object id = rec.get("id");
+        if (id instanceof String sid && store.deleteById(col, sid)) {
+            eventBus.publish(new Event("delete", col, Map.of("id", sid)));
+            count++;
+
+            // Audit Log Kaydı (DELETE -> oldValues: rec, newValues: null)
+            audit.recordDataAction(
+                    "recordDeleted",
+                    user.id(), user.name(),
+                    db, collection, sid,
+                    "Deleted record " + sid + " from " + db + "/" + collection,
+                    new LinkedHashMap<>(rec),
+                    null,
+                    true
+            );
+        }
+    }
+    return ok(rid, count + " record(s) deleted",
+              List.of(Map.of("deletedCount", (long) count)));
+}
     /**
      * Veritabani ADLARINI doner (duz string listesi).
      * PROTOKOL.md v1 sozlesmesi geregi bicimi degistirilmemistir;
@@ -837,6 +850,13 @@ String col = Store.key(db, collection);
      * Yalnizca kullanici islemleri geri alinabilir: kaydin "oldValues"
      * alanindaki eski durum kullaniciya yeniden yazilir.
      */
+/**
+     * Bir denetim kaydini geri alir (Hem kullanici hem CRUD veri islemlerini destekler).
+     */
+    /**
+     * Bir denetim kaydini geri alir (Hem kullanici hem CRUD veri islemlerini guvenle destekler).
+     */
+    @SuppressWarnings("unchecked")
     private String revertAuditLog(String rid, User admin, Map<String, Object> req) {
         requireSuperAdmin(admin);
 
@@ -853,16 +873,79 @@ String col = Store.key(db, collection);
             throw new Invalid("This operation cannot be reverted");
         }
 
-        Map<String, Object> oldValues = mapOrEmpty(log.get("oldValues"));
+        String action = str(log, "action");
+        Map<String, Object> oldValues = mapOrNull(log.get("oldValues"));
+        Map<String, Object> newValues = mapOrNull(log.get("newValues"));
+
+        // ----------------------------------------------------
+        // SENARYO 1: CRUD Veri Degisikligi Geri Alma
+        // ----------------------------------------------------
+        String targetDb = str(log, "targetDatabase");
+        String targetCol = str(log, "targetCollection");
+        String recordId = str(log, "targetRecordId");
+
+        if (targetDb != null && targetCol != null) {
+            String colKey = Store.key(targetDb, targetCol);
+
+            switch (action) {
+                case "recordCreated" -> {
+                    if (recordId == null || !store.deleteById(colKey, recordId)) {
+                        throw new Invalid("Failed to revert recordCreated: Record not found or could not be deleted");
+                    }
+                    eventBus.publish(new Event("delete", colKey, Map.of("id", recordId)));
+                }
+                case "recordUpdated" -> {
+                    if (recordId == null || oldValues == null || oldValues.isEmpty()) {
+                        throw new Invalid("Failed to revert recordUpdated: Missing recordId or oldValues");
+                    }
+                    // Sistem alanlarini temizle; sadece is verisini guncelle
+                    Map<String, Object> safeOldValues = new LinkedHashMap<>(oldValues);
+                    safeOldValues.remove("id");
+                    safeOldValues.remove("_id");
+                    safeOldValues.remove("createdAt");
+                    safeOldValues.remove("updatedAt");
+
+                    Map<String, Object> revertedDoc = store.updateById(colKey, recordId, safeOldValues);
+                    if (revertedDoc == null) {
+                        throw new Invalid("Failed to revert recordUpdated: Record " + recordId + " not found in database");
+                    }
+                    eventBus.publish(new Event("update", colKey, revertedDoc));
+                }
+                case "recordDeleted" -> {
+                    if (oldValues == null || oldValues.isEmpty()) {
+                        throw new Invalid("Failed to revert recordDeleted: Missing oldValues");
+                    }
+                    Map<String, Object> restoredDoc = store.insert(colKey, new LinkedHashMap<>(oldValues));
+                    eventBus.publish(new Event("insert", colKey, restoredDoc));
+                }
+                default -> throw new Invalid("Unsupported data action for revert: " + action);
+            }
+
+            audit.markReverted(logId, admin.id(), admin.name());
+            audit.recordDataAction(
+                    action + "Reverted",
+                    admin.id(), admin.name(),
+                    targetDb, targetCol, recordId,
+                    "Geri alindi: " + log.get("description"),
+                    newValues,
+                    oldValues,
+                    false
+            );
+
+            return ok(rid, "Reverted data action: " + action, List.of(Map.of("logId", logId, "reverted", true)));
+        }
+
+        // ----------------------------------------------------
+        // SENARYO 2: Kullanici Islemi Geri Alma
+        // ----------------------------------------------------
         String targetId = str(log, "targetUserId");
-        if (targetId == null || oldValues.isEmpty()) {
+        if (targetId == null || oldValues == null || oldValues.isEmpty()) {
             throw new Invalid("This log does not contain enough information to revert");
         }
 
         User target = auth.byId(targetId);
         if (target == null) throw new Invalid("Target user no longer exists");
 
-        // Eski durumu geri yaz
         target.setName(str(oldValues, "name"));
         target.setRole(str(oldValues, "role"));
         target.setDepartments(stringSet(oldValues.get("departments")));
@@ -871,21 +954,13 @@ String col = Store.key(db, collection);
         target.setDeleted(Boolean.TRUE.equals(oldValues.get("isDeleted")));
         auth.save(target);
 
-        audit.markReverted(logId, admin.name());
+        audit.markReverted(logId, admin.id(), admin.name());
         audit.record("permissionsReverted", admin.id(), admin.name(),
                 target.id(), target.name(),
                 "Islem geri alindi: " + log.get("description"),
                 Map.of(), target.toPublicMap(), false);
 
         return ok(rid, "Reverted", List.of(target.toPublicMap()));
-    }
-
-    private static int intOr(Object o, int fallback) {
-        if (o instanceof Number n) return n.intValue();
-        if (o instanceof String s) {
-            try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) { }
-        }
-        return fallback;
     }
 
     // ============================================================
@@ -1526,6 +1601,14 @@ private static Map<String, Set<String>> permissionMap(Object o) {
         m.put("message", message);
         m.put("data", data);
         return Json.stringify(m);
+    }
+
+    private static int intOr(Object o, int fallback) {
+        if (o instanceof Number n) return n.intValue();
+        if (o instanceof String s) {
+            try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) { }
+        }
+        return fallback;
     }
 
     private static String unauthorized(String rid, String message) {

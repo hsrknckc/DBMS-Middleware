@@ -4,6 +4,8 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.util.List;
+import java.util.Map;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
@@ -371,7 +373,53 @@ public class ProtocolTest {
             String revertible = rpc(out, in, "{\"requestId\":\"a2\",\"action\":\"AUDIT_LOGS\"," + admin()
                     + ",\"filter\":{\"onlyRevertible\":true}}");
             check("revertible filter works", revertible.contains("\"isRevertible\":true"));
+section("CRUD Audit & Revert Tests");
 
+            // 1. Yeni kayıt ekle (WRITE -> Audit log oluşmalı)
+            String auditDb = "test_audit_db";
+            String auditCol = "urunler";
+            rpc(out, in, "{\"requestId\":\"a_db1\",\"action\":\"CREATE_DATABASE\"," + admin() + ",\"database\":\"" + auditDb + "\"}");
+            rpc(out, in, "{\"requestId\":\"a_col1\",\"action\":\"CREATE_COLLECTION\"," + admin() + ",\"database\":\"" + auditDb + "\",\"collection\":\"" + auditCol + "\"}");
+
+            String wRes = rpc(out, in, "{\"requestId\":\"a_w1\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"" + auditDb + "\",\"collection\":\"" + auditCol + "\",\"document\":{\"ad\":\"Laptop\",\"fiyat\":1500}}");
+            check("WRITE succeeds for audit test", wRes.contains("\"status\":\"OK\""));
+
+            // 2. Audit loglarını listele ve recordCreated kaydını doğrula
+            String logsRes = rpc(out, in, "{\"requestId\":\"a_l1\",\"action\":\"AUDIT_LOGS\"," + admin() + ",\"filter\":{\"action\":\"recordCreated\"}}");
+            check("Audit log records recordCreated action", logsRes.contains("\"action\":\"recordCreated\"") && logsRes.contains(auditCol));
+
+            // 3. Kaydı güncelle (UPDATE -> Audit log oluşmalı)
+            String uRes = rpc(out, in, "{\"requestId\":\"a_u1\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + auditDb + "\",\"collection\":\"" + auditCol + "\",\"filter\":{\"ad\":\"Laptop\"},\"document\":{\"fiyat\":2000}}");
+            check("UPDATE succeeds for audit test", uRes.contains("\"status\":\"OK\""));
+
+            // Güncelleme logunu çek
+            String uLogRes = rpc(out, in, "{\"requestId\":\"a_l2\",\"action\":\"AUDIT_LOGS\"," + admin() + ",\"filter\":{\"action\":\"recordUpdated\"}}");
+            check("Audit log records recordUpdated action", uLogRes.contains("\"action\":\"recordUpdated\"") && uLogRes.contains("2000"));
+
+            // 4. Güncelleme logunun gerçek ID'sini JSON parser ile parse ederek çek
+            Map<String, Object> parsedRes = jsonparser.Json.parseObject(uLogRes);
+            List<?> dataList = (List<?>) parsedRes.get("data");
+            Map<?, ?> firstLog = (Map<?, ?>) dataList.get(0);
+            String logId = String.valueOf(firstLog.get("id"));
+
+            String revRes = rpc(out, in, "{\"requestId\":\"a_rev1\",\"action\":\"REVERT_AUDIT_LOG\"," + admin()
+                    + ",\"filter\":{\"logId\":\"" + logId + "\"}}");
+            check("REVERT_AUDIT_LOG for UPDATE succeeds", revRes.contains("\"status\":\"OK\""));
+
+            // Kaydın fiyatı gerçekten 1500'e döndü mü kontrol et
+            String readAfterRev = rpc(out, in, "{\"requestId\":\"a_r1\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"" + auditDb + "\",\"collection\":\"" + auditCol + "\",\"filter\":{\"ad\":\"Laptop\"}}");
+            check("Record reverted back to old values", readAfterRev.contains("1500") && !readAfterRev.contains("2000"));
+
+            // Aynı logu 2. kez revert etmeyi dene -> ERROR vermeli
+            String doubleRev = rpc(out, in, "{\"requestId\":\"a_rev2\",\"action\":\"REVERT_AUDIT_LOG\"," + admin()
+                    + ",\"filter\":{\"logId\":\"" + logId + "\"}}");
+            check("Double revert is rejected", doubleRev.contains("\"status\":\"ERROR\"") && doubleRev.contains("already been reverted"));
+
+            // 5. Test veritabanını temizle
+            rpc(out, in, "{\"requestId\":\"a_drop\",\"action\":\"DROP_DATABASE\"," + admin() + ",\"database\":\"" + auditDb + "\"}");
             String acts = rpc(out, in, "{\"requestId\":\"a3\",\"action\":\"RECENT_ACTIVITIES\"," + admin()
                     + ",\"filter\":{\"limit\":5}}");
             check("RECENT_ACTIVITIES returns activities", acts.contains("occurredAt"));
