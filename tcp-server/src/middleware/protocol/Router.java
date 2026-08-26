@@ -26,6 +26,9 @@ public class Router {
     /** Sema (alan tanimi) ust verisinin tutuldugu ayrilmis koleksiyon. */
     private static final String META_SCHEMAS = META_DB + "/schemas";
 
+    /** Tek bir UPDATE isteginde guncellenebilecek maksimum kayit sayisi. */
+    private static final int MAX_UPDATE_BATCH = 500;
+
     /** DEFINE_FIELDS ile kabul edilen tip adlari. */
     private static final java.util.Set<String> SUPPORTED_TYPES = java.util.Set.of(
             "string", "text", "int", "integer", "long",
@@ -241,27 +244,70 @@ public class Router {
         return ok(rid, "1 record inserted", List.of(inserted));
     }
 
-    /** Filtreye uyan TUM kayitlari gunceller. */
+    /** Filtreye uyan kayitlari guvenle gunceller; limit asiminda hicbir kayda dokunmaz. */
     private String update(String rid, User user, Map<String, Object> req) {
         require(user, "dataUpdate");
         String col = target(req);
-        Map<String, Object> doc = mapOrNull(req.get("document"));
-        if (doc == null) throw new Invalid("document field must be an object");
 
+        // 1. Dokuman Dogrulamasi
+        Map<String, Object> doc = mapOrNull(req.get("document"));
+        if (doc == null || doc.isEmpty()) {
+            throw new Invalid("document field must be a non-empty object");
+        }
+
+        // 2. SISTEM ALANLARI KORUMASI (Immutable Fields)
+        if (doc.containsKey("id") || doc.containsKey("_id")) {
+            throw new Invalid("Field 'id' cannot be updated");
+        }
+        if (doc.containsKey("createdAt")) {
+            throw new Invalid("Field 'createdAt' cannot be updated");
+        }
+
+        // 3. Bos Filtre Kalkani
+        Map<String, Object> filter = normalizeFilter(req.get("filter"));
+        if (filter == null || filter.isEmpty()) {
+            throw new Invalid("Filter is required for UPDATE. Mass update with empty filter is not allowed.");
+        }
+
+        // 4. Sema Uyumluluk Kontrolu
         validateAgainstSchema(str(req, "database"), str(req, "collection"), doc);
 
-        List<Map<String, Object>> matched = store.find(col, normalizeFilter(req.get("filter")));
+        // 5. Eslestir ve Limit Kontrolu Yap (Fail-Fast)
+        List<Map<String, Object>> matched = store.find(col, filter);
+        if (matched.isEmpty()) {
+            return ok(rid, "0 record(s) updated", List.of());
+        }
+
+        if (matched.size() > MAX_UPDATE_BATCH) {
+            throw new Invalid("Update affects too many records (" + matched.size() 
+                    + "). Maximum allowed: " + MAX_UPDATE_BATCH);
+        }
+
+        // 6. Guncellemeleri Calistir (Hata durumunda geri alma korumasiyla)
         List<Map<String, Object>> updated = new ArrayList<>();
-        for (Map<String, Object> rec : matched) {
-            Object id = rec.get("id");
-            if (id instanceof String sid) {
-                Map<String, Object> u = store.updateById(col, sid, doc);
-                if (u != null) {
-                    eventBus.publish(new Event("update", col, u));
-                    updated.add(u);
+        List<Map<String, Object>> rollbackList = new ArrayList<>();
+
+        try {
+            for (Map<String, Object> oldRec : matched) {
+                Object id = oldRec.get("id");
+                if (id instanceof String sid) {
+                    rollbackList.add(new LinkedHashMap<>(oldRec));
+
+                    Map<String, Object> u = store.updateById(col, sid, doc);
+                    if (u != null) {
+                        eventBus.publish(new Event("update", col, u));
+                        updated.add(u);
+                    }
                 }
             }
+        } catch (Exception e) {
+            for (Map<String, Object> oldRec : rollbackList) {
+                String sid = (String) oldRec.get("id");
+                store.updateById(col, sid, oldRec);
+            }
+            throw new Invalid("Update failed during execution, rolled back changes: " + e.getMessage());
         }
+
         return ok(rid, updated.size() + " record(s) updated", updated);
     }
 

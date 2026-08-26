@@ -128,6 +128,12 @@ public class ProtocolTest {
             check("DELETE with empty filter is rejected", massDel.contains("\"status\":\"ERROR\"") 
                 && massDel.contains("Mass deletion with empty filter is not allowed"));
 
+            String massUp = rpc(out, in, "{\"requestId\":\"up_mass\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"filter\":{},\"document\":{\"ad\":\"Hepsi\"}}");
+            check("UPDATE with empty filter is rejected", massUp.contains("\"status\":\"ERROR\"")
+                && massUp.contains("Mass update with empty filter is not allowed"));
+
+            section("Filter tolerance (_id alias) and delete count");
             section("Filter tolerance (_id alias) and delete count");
             rpc(out, in, "{\"requestId\":\"13a\",\"action\":\"WRITE\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Silinecek\"}}");
@@ -483,6 +489,199 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\"}");
             check("missing collection -> ERROR", missing.contains("collection field is required"));
 
+                        // ============================================================
+            // UPDATE SECURITY TESTS
+            // ============================================================
+
+            section("UPDATE Security Tests");
+
+            // ------------------------------------------------------------
+            // UPDATE testleri icin temiz bir collection olustur
+            // ------------------------------------------------------------
+            String updateTestDb = "update_security_db";
+            String updateTestCol = "records";
+
+            String createUpdateTestDb = rpc(out, in,
+                    "{\"requestId\":\"upd-setup-db\",\"action\":\"CREATE_DATABASE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb + "\"}");
+
+            String createUpdateTestCollection = rpc(out, in,
+                    "{\"requestId\":\"upd-setup-col\",\"action\":\"CREATE_COLLECTION\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"document\":{\"fields\":["
+                    + "{\"name\":\"name\",\"type\":\"string\"},"
+                    + "{\"name\":\"age\",\"type\":\"int\"}"
+                    + "]}}");
+
+            // Iki test kaydi
+            String updateSeed1 = rpc(out, in,
+                    "{\"requestId\":\"upd-seed-1\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"document\":{\"name\":\"Ali\",\"age\":20}}");
+
+            String updateSeed2 = rpc(out, in,
+                    "{\"requestId\":\"upd-seed-2\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"document\":{\"name\":\"Ayse\",\"age\":25}}");
+
+            // ------------------------------------------------------------
+            // 1. UPDATE without filter
+            // ------------------------------------------------------------
+            String updateNoFilter = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-1\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"document\":{\"name\":\"HACK\"}}");
+
+            check("UPDATE without filter is rejected",
+                    updateNoFilter.contains("\"status\":\"ERROR\"")
+                    && updateNoFilter.contains("Filter is required for UPDATE"));
+
+
+            // ------------------------------------------------------------
+            // 2. UPDATE with empty filter
+            // ------------------------------------------------------------
+            String updateEmptyFilter = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-2\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{},\"document\":{\"name\":\"HACK\"}}");
+
+            check("UPDATE with empty filter is rejected",
+                    updateEmptyFilter.contains("\"status\":\"ERROR\"")
+                    && updateEmptyFilter.contains("Mass update with empty filter is not allowed"));
+
+
+            // ------------------------------------------------------------
+            // 3. UPDATE with $where injection
+            // ------------------------------------------------------------
+            String updateWhereInjection = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-3\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"$where\":\"this.age == 20\"},"
+                    + "\"document\":{\"name\":\"HACK\"}}");
+
+            check("UPDATE rejects $where injection",
+                    updateWhereInjection.contains("\"status\":\"ERROR\"")
+                    && updateWhereInjection.contains("Dangerous query operator"));
+
+
+            // ------------------------------------------------------------
+            // 4. UPDATE with nested $ operator injection
+            // ------------------------------------------------------------
+            String updateNestedInjection = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-4\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"age\":{\"nested\":{\"$ne\":20}}},"
+                    + "\"document\":{\"name\":\"HACK\"}}");
+
+            check("UPDATE rejects nested $ operator injection",
+                    updateNestedInjection.contains("\"status\":\"ERROR\"")
+                    && updateNestedInjection.contains("Dangerous query operator"));
+
+
+            // ------------------------------------------------------------
+            // 5. UPDATE rejects invalid schema type
+            // ------------------------------------------------------------
+            String updateBadType = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-5\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"Ali\"},"
+                    + "\"document\":{\"age\":\"twenty\"}}");
+
+            check("UPDATE rejects invalid schema type",
+                    updateBadType.contains("\"status\":\"ERROR\"")
+                    && updateBadType.contains("must be of type"));
+
+
+            // ------------------------------------------------------------
+            // 6. Valid UPDATE succeeds
+            // ------------------------------------------------------------
+            String updateValid = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-6\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"Ali\"},"
+                    + "\"document\":{\"age\":21}}");
+
+            check("valid UPDATE succeeds",
+                    updateValid.contains("\"status\":\"OK\"")
+                    && updateValid.contains("1 record(s) updated"));
+
+
+            // ------------------------------------------------------------
+            // 7. Updated value can be read back
+            // ------------------------------------------------------------
+            String updateVerify = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-7\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"Ali\"}}");
+
+            check("updated record contains new value",
+                    updateVerify.contains("\"age\":21"));
+
+
+            // ------------------------------------------------------------
+            // 8. Immutable id cannot be changed
+            // ------------------------------------------------------------
+            String updateIdChange = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-8\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"Ali\"},"
+                    + "\"document\":{\"id\":\"fake-id\"}}");
+
+            check("UPDATE cannot change immutable id",
+                    updateIdChange.contains("\"status\":\"ERROR\"")
+                    && updateIdChange.contains("cannot be updated"));
+
+
+            // ------------------------------------------------------------
+            // 9. Immutable createdAt cannot be changed
+            // ------------------------------------------------------------
+            String updateCreatedAtChange = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-9\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"Ali\"},"
+                    + "\"document\":{\"createdAt\":\"1999-01-01\"}}");
+
+            check("UPDATE cannot change immutable createdAt",
+                    updateCreatedAtChange.contains("\"status\":\"ERROR\"")
+                    && updateCreatedAtChange.contains("cannot be updated"));
+
+
+            // ------------------------------------------------------------
+            // 10. UPDATE with no matching records
+            // ------------------------------------------------------------
+            String updateNoMatch = rpc(out, in,
+                    "{\"requestId\":\"upd-sec-10\",\"action\":\"UPDATE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb
+                    + "\",\"collection\":\"" + updateTestCol
+                    + "\",\"filter\":{\"name\":\"DoesNotExist\"},"
+                    + "\"document\":{\"age\":99}}");
+
+            check("UPDATE with no matching records returns 0",
+                    updateNoMatch.contains("\"status\":\"OK\"")
+                    && updateNoMatch.contains("0 record(s) updated"));
+
+
+            // ------------------------------------------------------------
+            // UPDATE test veritabanini temizle
+            // ------------------------------------------------------------
+            String dropUpdateTestDb = rpc(out, in,
+                    "{\"requestId\":\"upd-cleanup\",\"action\":\"DROP_DATABASE\"," + admin()
+                    + ",\"database\":\"" + updateTestDb + "\"}");
+
+            check("UPDATE security test database cleanup",
+                    dropUpdateTestDb.contains("\"status\":\"OK\""));
             section("DROP_DATABASE (permanent)");
             String drop = rpc(out, in, "{\"requestId\":\"35\",\"action\":\"DROP_DATABASE\"," + admin()
                     + ",\"database\":\"okul\"}");
