@@ -45,6 +45,27 @@ public class InMemoryStore implements Store {
     }
 
     @Override
+    public Map<String, Object> updateById(String collection, String id, Map<String, Object> data) {
+        List<Map<String, Object>> list = collections.get(collection);
+        if (list == null) return null;
+        synchronized (list) {
+            for (Map<String, Object> record : list) {
+                if (id.equals(record.get("id"))) {
+                    Object created = record.get("createdAt");
+                    record.putAll(data);
+                    record.put("id", id);
+                    if (created != null) {
+                        record.put("createdAt", created); // createdAt ezilmesini önle
+                    }
+                    record.put("updatedAt", currentTimestamp());
+                    return new LinkedHashMap<>(record);
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
     public List<String> insertMany(String collection, List<Map<String, Object>> records) {
         List<String> ids = new ArrayList<>();
         for (Map<String, Object> data : records) {
@@ -67,23 +88,6 @@ public class InMemoryStore implements Store {
             }
         }
         return result;
-    }
-
-    @Override
-    public Map<String, Object> updateById(String collection, String id, Map<String, Object> data) {
-        List<Map<String, Object>> list = collections.get(collection);
-        if (list == null) return null;
-        synchronized (list) {
-            for (Map<String, Object> record : list) {
-                if (id.equals(record.get("id"))) {
-                    record.putAll(data);         
-                    record.put("id", id);        
-                    record.put("updatedAt", currentTimestamp()); 
-                    return new LinkedHashMap<>(record); 
-                }
-            }
-        }
-        return null;
     }
 
     @Override

@@ -489,6 +489,62 @@ public class ProtocolTest {
                     + ",\"database\":\"okul\"}");
             check("missing collection -> ERROR", missing.contains("collection field is required"));
 
+            section("WRITE Security Tests");
+
+            // 1. Boş doküman ile ekleme denemesi -> ERROR dönmeli
+            String emptyWrite = rpc(out, in, "{\"requestId\":\"w_empty\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{}}");
+            check("WRITE with empty document is rejected", emptyWrite.contains("\"status\":\"ERROR\"")
+                    && emptyWrite.contains("non-empty object"));
+
+            // 2. Elle 'id' gönderme denemesi -> ERROR dönmeli
+            String fakeIdWrite = rpc(out, in, "{\"requestId\":\"w_id\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"id\":\"rec-fake\",\"ad\":\"Test\"}}");
+            check("WRITE with custom 'id' is rejected", fakeIdWrite.contains("\"status\":\"ERROR\"")
+                    && fakeIdWrite.contains("cannot be provided"));
+
+            // 3. Elle 'createdAt' gönderme denemesi -> ERROR dönmeli
+            String fakeDateWrite = rpc(out, in, "{\"requestId\":\"w_date\",\"action\":\"WRITE\"," + admin()
+                    + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"createdAt\":\"2020-01-01\",\"ad\":\"Test\"}}");
+            check("WRITE with custom 'createdAt' is rejected", fakeDateWrite.contains("\"status\":\"ERROR\"")
+                    && fakeDateWrite.contains("cannot be provided"));
+
+String dollarKeyWrite = rpc(out, in, "{\"requestId\":\"w_dollar\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"$gizli\":123}}");
+check("WRITE with '$' key prefix is rejected", dollarKeyWrite.contains("\"status\":\"ERROR\"")
+        && (dollarKeyWrite.contains("Dangerous query operator") || dollarKeyWrite.contains("Invalid document structure")));
+            section("WRITE & Server Timestamp Tests");
+
+// 1. Boş doküman reddedilmeli
+String wEmpty = rpc(out, in, "{\"requestId\":\"w1\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{}}");
+check("WRITE with empty document is rejected", wEmpty.contains("\"status\":\"ERROR\""));
+
+// 2. Elle id gönderimi reddedilmeli
+String wId = rpc(out, in, "{\"requestId\":\"w2\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"id\":\"custom-1\",\"ad\":\"Test\"}}");
+check("WRITE with custom id is rejected", wId.contains("\"status\":\"ERROR\"") && wId.contains("Field 'id' is generated"));
+
+// 3. Elle createdAt / updatedAt gönderimi reddedilmeli
+String wDate = rpc(out, in, "{\"requestId\":\"w3\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"createdAt\":\"2020-01-01\",\"ad\":\"Test\"}}");
+check("WRITE with custom createdAt is rejected", wDate.contains("\"status\":\"ERROR\""));
+
+String wUpDate = rpc(out, in, "{\"requestId\":\"w4\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"updatedAt\":\"2020-01-01\",\"ad\":\"Test\"}}");
+check("WRITE with custom updatedAt is rejected", wUpDate.contains("\"status\":\"ERROR\""));
+
+// 4. İç içe (nested) $ anahtarı reddedilmeli
+String wNestedDollar = rpc(out, in, "{\"requestId\":\"w5\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Test\",\"meta\":{\"$hack\":1}}}");
+check("WRITE with nested $ key is rejected", wNestedDollar.contains("\"status\":\"ERROR\""));
+
+// 5. Başarılı eklemede otomatik createdAt ve updatedAt oluşmalı
+String wSuccess = rpc(out, in, "{\"requestId\":\"w6\",\"action\":\"WRITE\"," + admin()
+        + ",\"database\":\"okul\",\"collection\":\"ogrenciler\",\"document\":{\"ad\":\"Ahmet\",\"sinif\":2}}");
+check("WRITE generates automatic createdAt", wSuccess.contains("\"createdAt\":\""));
+check("WRITE generates automatic updatedAt", wSuccess.contains("\"updatedAt\":\""));
+
                         // ============================================================
             // UPDATE SECURITY TESTS
             // ============================================================
