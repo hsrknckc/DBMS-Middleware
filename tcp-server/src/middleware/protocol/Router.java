@@ -12,11 +12,14 @@ import middleware.auth.User;
 import middleware.events.Event;
 import middleware.events.EventBus;
 import middleware.audit.AuditService;
+import middleware.config.AppConfig;
 import middleware.file.RequestFileService;
 import middleware.validation.SchemaValidator;
 import middleware.validation.FilterSanitizer;
 import middleware.server.ClientSession;
 import middleware.storage.Store;
+import middleware.storage.backup.BackupService;
+import middleware.storage.backup.RestoreService;
 
 public class Router {
 
@@ -41,6 +44,8 @@ public class Router {
     private final AuthService auth;
     private final RequestFileService files;
     private final AuditService audit;
+    private final BackupService backupService;
+    private final RestoreService restoreService;
 
     /**
      * Tanimlanmamis alanlarin tipi ilk yazmada ogrenilsin mi?
@@ -55,12 +60,22 @@ public class Router {
 
     public Router(Store store, EventBus eventBus, AuthService auth,
                   RequestFileService files, AuditService audit, boolean autoSchema) {
+        this(store, eventBus, auth, files, audit, autoSchema, null, null);
+    }
+
+    public Router(Store store, EventBus eventBus, AuthService auth,
+                  RequestFileService files, AuditService audit, boolean autoSchema,
+                  BackupService backupService, RestoreService restoreService) {
         this.store = store;
         this.eventBus = eventBus;
         this.auth = auth;
         this.files = files;
         this.audit = audit;
         this.autoSchema = autoSchema;
+        this.backupService = backupService != null
+                ? backupService : new BackupService(store, new AppConfig());
+        this.restoreService = restoreService != null
+                ? restoreService : new RestoreService(store);
     }
 
     // ============================================================
@@ -116,6 +131,8 @@ public class Router {
                 case "RESTORE_DATABASE" -> restoreDatabase(requestId, user, req);
                 case "DROP_DATABASE"    -> dropDatabase(requestId, user, req);
                 case "LIST_DATABASES_INFO" -> listDatabasesInfo(requestId, user, req);
+                case "BACKUP_DATABASE"  -> backupDatabase(requestId, user, req);
+                case "RESTORE_SNAPSHOT" -> restoreSnapshot(requestId, user, req);
 
                 // --- Koleksiyon yonetimi ---
                 case "CREATE_COLLECTION" -> createCollection(requestId, user, req);
@@ -595,6 +612,82 @@ private String delete(String rid, User user, Map<String, Object> req) {
         }
         eventBus.publish(new Event("delete", META_DATABASES, Map.of("name", name)));
         return ok(rid, "Database dropped: " + name + " (" + removed + " collection(s))", List.of());
+    }
+
+    /**
+     * Veritabanini BSON parcali snapshot olarak yedekler (SuperAdmin).
+     * Dizin: backup/&lt;database&gt;/&lt;yyyyMMdd_HHmmss_SSS&gt;/
+     */
+    private String backupDatabase(String rid, User user, Map<String, Object> req) {
+        requireSuperAdmin(user);
+        String name = databaseName(req);
+        Map<String, Object> report = backupService.backupDatabase(name);
+        return ok(rid, "Backup completed", List.of(report));
+    }
+
+    /**
+     * Snapshot klasorundeki BSON parcalarini hedef veritabanina yukler (SuperAdmin).
+     * path / snapshotPath yalnizca backup kok dizini altinda cozulur.
+     * Politika: hedef veritabani bos olmalidir (duplicate restore reddedilir).
+     */
+    private String restoreSnapshot(String rid, User user, Map<String, Object> req) {
+        requireSuperAdmin(user);
+
+        String requestedPath = snapshotPathParam(req);
+        String targetDatabase = str(req, "targetDatabase");
+        if (targetDatabase == null) {
+            targetDatabase = str(mapOrEmpty(req.get("document")), "targetDatabase");
+        }
+        if (targetDatabase == null || targetDatabase.isBlank()) {
+            throw new Invalid("targetDatabase is required");
+        }
+        if (META_DB.equals(targetDatabase)) {
+            throw new Invalid("Reserved database name: " + META_DB);
+        }
+
+        java.nio.file.Path resolved = resolveUnderBackupRoot(requestedPath);
+        try {
+            Map<String, Object> report = restoreService.restoreSnapshot(
+                    resolved.toString(), targetDatabase);
+            return ok(rid, "Restore completed", List.of(report));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new Invalid(e.getMessage());
+        }
+    }
+
+    /** path | snapshotPath | document.path | filter.path */
+    private static String snapshotPathParam(Map<String, Object> req) {
+        String path = str(req, "path");
+        if (path == null) path = str(req, "snapshotPath");
+        if (path == null) path = str(mapOrEmpty(req.get("document")), "path");
+        if (path == null) path = str(mapOrEmpty(req.get("document")), "snapshotPath");
+        if (path == null) path = str(mapOrEmpty(req.get("filter")), "path");
+        if (path == null) path = str(mapOrEmpty(req.get("filter")), "snapshotPath");
+        if (path == null) {
+            throw new Invalid("'path' (or snapshotPath) is required");
+        }
+        return path;
+    }
+
+    /**
+     * Istek yolunu backup kok dizini altinda cozer.
+     * Mutlak yollar kabul edilir; kok disina cikanlar reddedilir.
+     */
+    private java.nio.file.Path resolveUnderBackupRoot(String requested) {
+        java.nio.file.Path base = backupService.backupRoot();
+        java.nio.file.Path candidate;
+        try {
+            java.nio.file.Path raw = java.nio.file.Paths.get(requested);
+            candidate = raw.isAbsolute()
+                    ? raw.toAbsolutePath().normalize()
+                    : base.resolve(raw).normalize();
+        } catch (java.nio.file.InvalidPathException e) {
+            throw new Invalid("Invalid path: " + requested);
+        }
+        if (!candidate.startsWith(base)) {
+            throw new Invalid("Path is outside the backup directory: " + requested);
+        }
+        return candidate;
     }
 
     /**

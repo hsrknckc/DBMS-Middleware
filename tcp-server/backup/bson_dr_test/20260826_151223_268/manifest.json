@@ -1,0 +1,1 @@
+{"version":1,"database":"bson_dr_test","snapshotTag":"20260826_151223_268","totalRecords":8,"maxChunkBytes":104857600,"collections":[{"name":"kayitlar","recordCount":8,"files":["bson_dr_test_kayitlar.bson"]}]}

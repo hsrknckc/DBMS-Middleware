@@ -114,6 +114,94 @@ public class AppConfig {
         return get("REQUEST_DIR", "RequestDir", "db-requests");
     }
 
+    /**
+     * BSON yedeklerinin kok dizini.
+     * Ortam: BACKUP_DIR — config.xml: BackupDir — varsayilan: "backup"
+     */
+    public String backupDirectory() {
+        return get("BACKUP_DIR", "BackupDir", "backup");
+    }
+
+    /**
+     * Periyodik otomatik backup acik mi?
+     * Ortam: BACKUP_ENABLED — config.xml: BackupEnabled — varsayilan: true
+     */
+    public boolean backupEnabled() {
+        String value = get("BACKUP_ENABLED", "BackupEnabled", "true");
+        return !"false".equalsIgnoreCase(value.trim());
+    }
+
+    /**
+     * Otomatik backup araligi (dakika).
+     * Ortam: BACKUP_INTERVAL_MINUTES — config.xml: BackupIntervalMinutes
+     * Varsayilan 60; gecersiz/&lt;1 ise 60.
+     */
+    public int backupIntervalMinutes() {
+        String value = get("BACKUP_INTERVAL_MINUTES", "BackupIntervalMinutes", "60");
+        try {
+            int minutes = Integer.parseInt(value.trim());
+            if (minutes < 1) {
+                System.out.println("[config] UYARI: BackupIntervalMinutes < 1, varsayilan: 60");
+                return 60;
+            }
+            return minutes;
+        } catch (NumberFormatException e) {
+            System.out.println("[config] UYARI: gecersiz BackupIntervalMinutes '" + value
+                    + "', varsayilan kullaniliyor: 60");
+            return 60;
+        }
+    }
+
+    /**
+     * Veritabani basina saklanacak basarili snapshot sayisi.
+     * Ortam: BACKUP_RETENTION_COUNT — config.xml: BackupRetentionCount
+     * Varsayilan 24; gecersiz/&lt;1 ise 24.
+     */
+    public int backupRetentionCount() {
+        String value = get("BACKUP_RETENTION_COUNT", "BackupRetentionCount", "24");
+        try {
+            int count = Integer.parseInt(value.trim());
+            if (count < 1) {
+                System.out.println("[config] UYARI: BackupRetentionCount < 1, varsayilan: 24");
+                return 24;
+            }
+            return count;
+        } catch (NumberFormatException e) {
+            System.out.println("[config] UYARI: gecersiz BackupRetentionCount '" + value
+                    + "', varsayilan kullaniliyor: 24");
+            return 24;
+        }
+    }
+
+    /**
+     * Tek BSON parcasinin ust siniri (bayt).
+     * Ortam: BACKUP_MAX_CHUNK_MB — config.xml: BackupMaxChunkMB
+     * Aralik: 1–2048 MB; gecersiz/negatif/tasmasinda varsayilan 100 MB.
+     */
+    public long maxChunkSizeBytes() {
+        String value = get("BACKUP_MAX_CHUNK_MB", "BackupMaxChunkMB", "100");
+        long mb;
+        try {
+            mb = Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            System.out.println("[config] UYARI: gecersiz BackupMaxChunkMB '" + value
+                    + "', varsayilan kullaniliyor: 100");
+            return 100L * 1024L * 1024L;
+        }
+        if (mb < 1 || mb > 2048) {
+            System.out.println("[config] UYARI: BackupMaxChunkMB aralik disi (" + mb
+                    + "), 1–2048 arasina kirpiliyor");
+            if (mb < 1) mb = 1;
+            if (mb > 2048) mb = 2048;
+        }
+        // mb * 1024 * 1024 tasmasin diye once bolme guvenligi
+        long maxSafe = Long.MAX_VALUE / (1024L * 1024L);
+        if (mb > maxSafe) {
+            return 2048L * 1024L * 1024L;
+        }
+        return mb * 1024L * 1024L;
+    }
+
     /** Sunucu portu; gecersiz deger verilirse varsayilana duser. */
     public int serverPort(int fallback) {
         String value = get("PORT", "ServerPort", null);

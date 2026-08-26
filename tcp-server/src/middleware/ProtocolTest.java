@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.net.Socket;
@@ -878,13 +879,125 @@ check("WRITE generates automatic updatedAt", wSuccess.contains("\"updatedAt\":\"
 
             check("UPDATE security test database cleanup",
                     dropUpdateTestDb.contains("\"status\":\"OK\""));
+
+            section("BACKUP_DATABASE / RESTORE_SNAPSHOT");
+            String backupDb = "bson_dr_test";
+            String backupCol = "kayitlar";
+            rpc(out, in, "{\"requestId\":\"bk0\",\"action\":\"DROP_DATABASE\"," + admin()
+                    + ",\"database\":\"" + backupDb + "\"}");
+            Map<String, Object> bkCreate = parseRpc(out, in,
+                    "{\"requestId\":\"bk1\",\"action\":\"CREATE_DATABASE\"," + admin()
+                    + ",\"database\":\"" + backupDb + "\"}");
+            check("backup test database created", isOk(bkCreate));
+            rpc(out, in, "{\"requestId\":\"bk2\",\"action\":\"CREATE_COLLECTION\"," + admin()
+                    + ",\"database\":\"" + backupDb + "\",\"collection\":\"" + backupCol + "\"}");
+
+            int seedCount = 8;
+            for (int i = 1; i <= seedCount; i++) {
+                rpc(out, in, "{\"requestId\":\"bk_w" + i + "\",\"action\":\"WRITE\"," + admin()
+                        + ",\"database\":\"" + backupDb + "\",\"collection\":\"" + backupCol + "\","
+                        + "\"document\":{\"ad\":\"Kayit-" + i + "\",\"no\":" + i + "}}");
+            }
+            Map<String, Object> beforeBackup = parseRpc(out, in,
+                    "{\"requestId\":\"bk3\",\"action\":\"READ\"," + admin()
+                    + ",\"database\":\"" + backupDb + "\",\"collection\":\"" + backupCol + "\"}");
+            List<Map<String, Object>> originalRows = dataRows(beforeBackup);
+            check("seeded " + seedCount + " records before backup", originalRows.size() == seedCount);
+            Map<String, Object> sample = originalRows.get(0);
+            String sampleId = String.valueOf(sample.get("id"));
+            String sampleCreated = String.valueOf(sample.get("createdAt"));
+            String sampleUpdated = String.valueOf(sample.get("updatedAt"));
+            String sampleAd = String.valueOf(sample.get("ad"));
+
+            Map<String, Object> backupResp = parseRpc(out, in,
+                    "{\"requestId\":\"bk4\",\"action\":\"BACKUP_DATABASE\","
+                    + admin() + ",\"database\":\"" + backupDb + "\"}");
+            check("BACKUP_DATABASE ok", isOk(backupResp)
+                    && "Backup completed".equals(backupResp.get("message")));
+            Map<String, Object> backupReport = data0(backupResp);
+            String snapshotTag = strVal(backupReport.get("snapshotTag"));
+            check("snapshotTag present", snapshotTag != null && !snapshotTag.isBlank());
+            check("snapshotTag has millisecond precision",
+                    snapshotTag != null && snapshotTag.matches("\\d{8}_\\d{6}_\\d{3}.*"));
+            Object filesObj = backupReport.get("filesCreated");
+            check("filesCreated >= 1",
+                    filesObj instanceof List<?> files && !files.isEmpty());
+            String snapshotPath = strVal(backupReport.get("path"));
+            check("snapshot path returned",
+                    snapshotPath != null && snapshotPath.contains(backupDb));
+
+            Map<String, Object> limitedBackup = parseRpc(out, in,
+                    "{\"requestId\":\"bk4b\",\"action\":\"BACKUP_DATABASE\","
+                    + limited() + ",\"database\":\"" + backupDb + "\"}");
+            check("BACKUP_DATABASE denied for non-admin", isUnauthorized(limitedBackup));
+
+            Map<String, Object> dropForRestore = parseRpc(out, in,
+                    "{\"requestId\":\"bk5\",\"action\":\"DROP_DATABASE\","
+                    + admin() + ",\"database\":\"" + backupDb + "\"}");
+            check("DROP_DATABASE before restore", isOk(dropForRestore));
+            Map<String, Object> goneBeforeRestore = parseRpc(out, in,
+                    "{\"requestId\":\"bk6\",\"action\":\"READ\","
+                    + admin() + ",\"database\":\"" + backupDb + "\",\"collection\":\"" + backupCol + "\"}");
+            check("records gone after drop", dataRows(goneBeforeRestore).isEmpty());
+
+            Map<String, Object> restoreResp = parseRpc(out, in,
+                    "{\"requestId\":\"bk7\",\"action\":\"RESTORE_SNAPSHOT\","
+                    + admin() + ",\"path\":\"" + jsonEscape(snapshotPath) + "\","
+                    + "\"targetDatabase\":\"" + backupDb + "\"}");
+            check("RESTORE_SNAPSHOT ok", isOk(restoreResp)
+                    && "Restore completed".equals(restoreResp.get("message")));
+            Map<String, Object> restoreReport = data0(restoreResp);
+            check("restore reports totalRecords",
+                    numberEquals(restoreReport.get("totalRecords"), seedCount));
+
+            Map<String, Object> afterRestore = parseRpc(out, in,
+                    "{\"requestId\":\"bk8\",\"action\":\"READ\","
+                    + admin() + ",\"database\":\"" + backupDb + "\",\"collection\":\"" + backupCol + "\"}");
+            List<Map<String, Object>> restoredRows = dataRows(afterRestore);
+            check("all records restored after RESTORE_SNAPSHOT", restoredRows.size() == seedCount);
+            check("restored payload contains seeded names",
+                    restoredRows.stream().anyMatch(row -> ("Kayit-1").equals(String.valueOf(row.get("ad"))))
+                    && restoredRows.stream().anyMatch(row ->
+                            ("Kayit-" + seedCount).equals(String.valueOf(row.get("ad")))));
+
+            Map<String, Object> preserved = restoredRows.stream()
+                    .filter(row -> sampleId.equals(String.valueOf(row.get("id"))))
+                    .findFirst().orElse(null);
+            check("ID preservation after restore", preserved != null);
+            check("createdAt preservation after restore",
+                    preserved != null && sampleCreated.equals(String.valueOf(preserved.get("createdAt"))));
+            check("updatedAt preservation after restore",
+                    preserved != null && sampleUpdated.equals(String.valueOf(preserved.get("updatedAt"))));
+            check("payload preservation after restore",
+                    preserved != null && sampleAd.equals(String.valueOf(preserved.get("ad"))));
+
+            Map<String, Object> dupRestore = parseRpc(out, in,
+                    "{\"requestId\":\"bk8b\",\"action\":\"RESTORE_SNAPSHOT\","
+                    + admin() + ",\"path\":\"" + jsonEscape(snapshotPath) + "\","
+                    + "\"targetDatabase\":\"" + backupDb + "\"}");
+            check("duplicate restore rejected (target not empty)",
+                    isError(dupRestore)
+                    && String.valueOf(dupRestore.get("message")).contains("not empty"));
+
+            Map<String, Object> traversal = parseRpc(out, in,
+                    "{\"requestId\":\"bk9\",\"action\":\"RESTORE_SNAPSHOT\","
+                    + admin() + ",\"path\":\"../etc/passwd\",\"targetDatabase\":\"" + backupDb + "\"}");
+            check("RESTORE_SNAPSHOT blocks path traversal",
+                    isError(traversal)
+                    && String.valueOf(traversal.get("message")).contains("outside the backup directory"));
+
+            rpc(out, in, "{\"requestId\":\"bk10\",\"action\":\"DROP_DATABASE\"," + admin()
+                    + ",\"database\":\"" + backupDb + "\"}");
+
             section("DROP_DATABASE (permanent)");
-            String drop = rpc(out, in, "{\"requestId\":\"35\",\"action\":\"DROP_DATABASE\"," + admin()
+            Map<String, Object> drop = parseRpc(out, in,
+                    "{\"requestId\":\"35\",\"action\":\"DROP_DATABASE\"," + admin()
                     + ",\"database\":\"okul\"}");
-            check("DROP_DATABASE ok", drop.contains("\"status\":\"OK\""));
-            String gone = rpc(out, in, "{\"requestId\":\"36\",\"action\":\"READ\"," + admin()
+            check("DROP_DATABASE ok", isOk(drop));
+            Map<String, Object> gone = parseRpc(out, in,
+                    "{\"requestId\":\"36\",\"action\":\"READ\"," + admin()
                     + ",\"database\":\"okul\",\"collection\":\"ogrenciler\"}");
-            check("records are gone after drop", gone.contains("0 record(s) found"));
+            check("records are gone after drop", dataRows(gone).isEmpty());
         }
 
         System.out.println("\n==========================================");
@@ -907,8 +1020,65 @@ check("WRITE generates automatic updatedAt", wSuccess.contains("\"updatedAt\":\"
         return in.readLine();
     }
 
+    static Map<String, Object> parseRpc(PrintWriter out, BufferedReader in, String msg) throws Exception {
+        return jsonparser.Json.parseObject(rpc(out, in, msg));
+    }
+
     static void section(String title) {
         System.out.println("--- " + title + " ---");
+    }
+
+    static String jsonEscape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    static boolean isOk(Map<String, Object> resp) {
+        return "OK".equals(resp.get("status"));
+    }
+
+    static boolean isError(Map<String, Object> resp) {
+        return "ERROR".equals(resp.get("status"));
+    }
+
+    static boolean isUnauthorized(Map<String, Object> resp) {
+        return "UNAUTHORIZED".equals(resp.get("status"));
+    }
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> data0(Map<String, Object> resp) {
+        Object data = resp.get("data");
+        if (!(data instanceof List<?> list) || list.isEmpty()) {
+            return Map.of();
+        }
+        Object first = list.get(0);
+        return (first instanceof Map) ? (Map<String, Object>) first : Map.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    static List<Map<String, Object>> dataRows(Map<String, Object> resp) {
+        Object data = resp.get("data");
+        if (!(data instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m) {
+                rows.add((Map<String, Object>) m);
+            }
+        }
+        return rows;
+    }
+
+    static String strVal(Object o) {
+        return (o instanceof String s && !s.isBlank()) ? s : (o == null ? null : String.valueOf(o));
+    }
+
+    static boolean numberEquals(Object actual, long expected) {
+        if (actual instanceof Number n) return n.longValue() == expected;
+        if (actual instanceof String s) {
+            try { return Long.parseLong(s.trim()) == expected; }
+            catch (NumberFormatException ignored) { return false; }
+        }
+        return false;
     }
 
     /**
@@ -939,12 +1109,26 @@ check("WRITE generates automatic updatedAt", wSuccess.contains("\"updatedAt\":\"
                 "{ bu bozuk".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
-    /** Cevaptan bir alanin ilk degerini cikarir (basit metin arama). */
+    /** Cevaptan bir alanin ilk degerini JSON agacinda arayarak cikarir. */
     static String extract(String json, String key) {
-        int i = json.indexOf("\"" + key + "\":\"");
-        if (i < 0) return null;
-        int start = i + key.length() + 4;
-        return json.substring(start, json.indexOf('"', start));
+        Object found = findValue(jsonparser.Json.parseObject(json), key);
+        return found == null ? null : String.valueOf(found);
+    }
+
+    static Object findValue(Object node, String key) {
+        if (node instanceof Map<?, ?> map) {
+            if (map.containsKey(key)) return map.get(key);
+            for (Object v : map.values()) {
+                Object found = findValue(v, key);
+                if (found != null) return found;
+            }
+        } else if (node instanceof List<?> list) {
+            for (Object item : list) {
+                Object found = findValue(item, key);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     static void check(String name, boolean cond) {

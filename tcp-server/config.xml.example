@@ -28,4 +28,11 @@
     <!-- Veritabani talep dosyalarinin klasoru (Ister_0011) -->
     <RequestDir>db-requests</RequestDir>
 
+    <!-- Periyodik BSON snapshot backup -->
+    <BackupEnabled>true</BackupEnabled>
+    <BackupIntervalMinutes>60</BackupIntervalMinutes>
+    <BackupDir>backup</BackupDir>
+    <BackupMaxChunkMB>100</BackupMaxChunkMB>
+    <BackupRetentionCount>24</BackupRetentionCount>
+
 </xmlConfig>

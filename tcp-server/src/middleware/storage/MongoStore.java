@@ -180,6 +180,39 @@ public class MongoStore implements Store {
         return ids;
     }
 
+    /**
+     * Restore icin: id / createdAt / updatedAt korunur.
+     * Ayni id koleksiyonda varsa reddeder.
+     */
+    @Override
+    public List<String> insertExact(String collection, List<Map<String, Object>> records) {
+        List<String> ids = new ArrayList<>();
+        List<Document> docs = new ArrayList<>();
+        if (records == null || records.isEmpty()) return ids;
+
+        String t = now();
+        for (Map<String, Object> data : records) {
+            Document doc = new Document(data == null ? Map.of() : data);
+            Object rawId = doc.get("id");
+            String id = (rawId instanceof String s && !s.isBlank())
+                    ? s : "rec-" + UUID.randomUUID();
+            if (coll(collection).find(Filters.eq("id", id)).limit(1).first() != null) {
+                throw new IllegalStateException("Duplicate id on restore: " + id);
+            }
+            doc.put("id", id);
+            if (!(doc.get("createdAt") instanceof String c && !c.isBlank())) {
+                doc.put("createdAt", t);
+            }
+            if (!(doc.get("updatedAt") instanceof String u && !u.isBlank())) {
+                doc.put("updatedAt", t);
+            }
+            docs.add(doc);
+            ids.add(id);
+        }
+        coll(collection).insertMany(docs);
+        return ids;
+    }
+
     @Override
     public List<Map<String, Object>> find(String collection, Map<String, Object> filter) {
         List<Map<String, Object>> result = new ArrayList<>();
@@ -189,6 +222,24 @@ public class MongoStore implements Store {
             result.add(toMap(doc));
         }
         return result;
+    }
+
+    /**
+     * Buyuk koleksiyonlari RAM'e almadan cursor ile gezer.
+     * batchSize(1000): surucu her seferinde en fazla 1000 belge ceker.
+     */
+    @Override
+    public void forEach(String collection, Map<String, Object> filter,
+                        Consumer<Map<String, Object>> consumer) {
+        try (var cursor = coll(collection)
+                .find(query(filter))
+                .projection(Projections.excludeId())
+                .batchSize(1000)
+                .iterator()) {
+            while (cursor.hasNext()) {
+                consumer.accept(toMap(cursor.next()));
+            }
+        }
     }
 
     @Override

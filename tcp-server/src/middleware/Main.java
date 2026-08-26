@@ -12,6 +12,9 @@ import middleware.server.TcpServer;
 import middleware.storage.InMemoryStore;
 import middleware.storage.MongoStore;
 import middleware.storage.Store;
+import middleware.storage.backup.BackupService;
+import middleware.storage.backup.BackupScheduler;
+import middleware.storage.backup.RestoreService;
 
 public class Main {
 
@@ -37,10 +40,24 @@ public class Main {
 
         AuthService auth = new AuthService(store);
         AuditService audit = new AuditService(store);
-        Router router = new Router(store, eventBus, auth, files, audit, config.autoSchema());
+        BackupService backup = new BackupService(store, config);
+        RestoreService restore = new RestoreService(store);
+        BackupScheduler backupScheduler = new BackupScheduler(backup, store, config);
+        System.out.println("[backup] Yedek klasoru: " + backup.backupRoot()
+                + " (enabled=" + config.backupEnabled()
+                + ", intervalMin=" + config.backupIntervalMinutes()
+                + ", retention=" + config.backupRetentionCount() + ")");
+        Router router = new Router(store, eventBus, auth, files, audit,
+                config.autoSchema(), backup, restore);
 
-        // Sunucu kapanirken veritabani baglantisini duzgunce kapat.
-        Runtime.getRuntime().addShutdownHook(new Thread(store::close));
+        backupScheduler.start();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                backupScheduler.close();
+            } catch (Exception ignored) { }
+            store.close();
+        }));
 
         new TcpServer(port, router, eventBus).start();
     }

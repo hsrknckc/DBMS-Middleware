@@ -74,6 +74,48 @@ public class InMemoryStore implements Store {
         return ids;
     }
 
+    /**
+     * Restore icin: id / createdAt / updatedAt korunur.
+     * Ayni id koleksiyonda varsa reddeder.
+     */
+    @Override
+    public List<String> insertExact(String collection, List<Map<String, Object>> records) {
+        List<String> ids = new ArrayList<>();
+        if (records == null || records.isEmpty()) return ids;
+
+        List<Map<String, Object>> list =
+                collections.computeIfAbsent(collection, k -> new ArrayList<>());
+        synchronized (list) {
+            for (Map<String, Object> data : records) {
+                Map<String, Object> record = new LinkedHashMap<>(data == null ? Map.of() : data);
+                String id = asNonBlankString(record.get("id"));
+                if (id == null) {
+                    id = "rec-" + idCounter.getAndIncrement();
+                    record.put("id", id);
+                }
+                for (Map<String, Object> existing : list) {
+                    if (id.equals(existing.get("id"))) {
+                        throw new IllegalStateException("Duplicate id on restore: " + id);
+                    }
+                }
+                String now = currentTimestamp();
+                if (asNonBlankString(record.get("createdAt")) == null) {
+                    record.put("createdAt", now);
+                }
+                if (asNonBlankString(record.get("updatedAt")) == null) {
+                    record.put("updatedAt", now);
+                }
+                list.add(record);
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    private static String asNonBlankString(Object value) {
+        return (value instanceof String s && !s.isBlank()) ? s : null;
+    }
+
     @Override
     public List<Map<String, Object>> find(String collection, Map<String, Object> filter) {
         List<Map<String, Object>> list = collections.get(collection);

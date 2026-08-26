@@ -2,6 +2,7 @@ package middleware.storage;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Veri deposu sozlesmesi.
@@ -33,8 +34,26 @@ public interface Store {
     /** Birden fazla kaydi ekler, atanan id'leri doner. */
     List<String> insertMany(String collection, List<Map<String, Object>> records);
 
+    /**
+     * Kayitlari oldugu gibi yazar (restore).
+     * id / createdAt / updatedAt varsa korunur; yoksa uretilir.
+     * Ayni id zaten varsa IllegalStateException firlatir.
+     */
+    List<String> insertExact(String collection, List<Map<String, Object>> records);
+
     /** Filtreye uyan kayitlari doner. filter null/bos ise tum kayitlar. */
     List<Map<String, Object>> find(String collection, Map<String, Object> filter);
+
+    /**
+     * Filtreye uyan kayitlari bellege toplmadan sirayla isler (OOM'suz akis).
+     * Varsayilan uygulama find() sonucunu gezer; MongoStore cursor ile ezer.
+     */
+    default void forEach(String collection, Map<String, Object> filter,
+                         Consumer<Map<String, Object>> consumer) {
+        for (Map<String, Object> record : find(collection, filter)) {
+            consumer.accept(record);
+        }
+    }
 
     /** id ile tek kaydi kismen gunceller; guncel halini doner, kayit yoksa null. */
     Map<String, Object> updateById(String collection, String id, Map<String, Object> data);
