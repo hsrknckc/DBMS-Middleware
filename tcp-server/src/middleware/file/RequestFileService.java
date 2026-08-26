@@ -7,26 +7,16 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import jsonparser.Json;
 
 /**
- * VERITABANI TALEP DOSYASI SERVISI (Ister_0011, Ister_0012)
+ * VERITABANI / KULLANICI TALEP DOSYASI SERVISI
  *
- * On Yuz, kullanicinin tasarladigi veritabani alanlarini JSON dosyasina
- * yazip belirledigi bir klasore kaydeder (Ister_0006, Ister_0007).
- * Ara katman bu dosyanin var olup olmadigini kontrol eder (Ister_0011)
- * ve iceriginden veritabani alanlarini yaratir (Ister_0012).
- *
- * GUVENLIK: DIZIN SINIRI
- * Dosya yolu ag uzerinden geldigi icin serbest birakilamaz; aksi halde
- * istemci sunucudaki herhangi bir dosyayi okuyabilirdi (path traversal).
- * Bu yuzden tum yollar bir TABAN KLASOR altinda cozulur ve disari cikma
- * denemeleri reddedilir.
- *
- * Taban klasor REQUEST_DIR ortam degiskeni ile belirlenir;
- * verilmezse calisma dizinindeki "db-requests" kullanilir.
+ * database_*.json -> database import islemleri
+ * user_*.json     -> user / permission import islemleri
  */
 public class RequestFileService {
 
@@ -34,43 +24,41 @@ public class RequestFileService {
 
     public RequestFileService(String baseDirectory) {
         String dir = (baseDirectory == null || baseDirectory.isBlank())
-                ? "db-requests" : baseDirectory;
+                ? "db-requests"
+                : baseDirectory;
         this.baseDirectory = Paths.get(dir).toAbsolutePath().normalize();
     }
 
-    /** Taban klasorun mutlak yolu (loglarda ve cevaplarda gosterilir). */
+    /** Taban klasorun mutlak yolu. */
     public String baseDirectory() {
         return baseDirectory.toString();
     }
 
     /**
      * Istenen yolu taban klasor altinda cozer.
-     * Disari cikmaya calisan yollar (".." vb.) reddedilir.
-     *
-     * @throws PathNotAllowed yol taban klasorun disina cikiyorsa
+     * ".." ile klasor disina cikmaya calisan yollar reddedilir.
      */
     private Path resolve(String requested) {
         if (requested == null || requested.isBlank()) {
             throw new PathNotAllowed("path is required");
         }
+
         Path candidate;
         try {
             candidate = baseDirectory.resolve(requested).normalize();
         } catch (InvalidPathException e) {
             throw new PathNotAllowed("Invalid path: " + requested);
         }
+
         if (!candidate.startsWith(baseDirectory)) {
             throw new PathNotAllowed("Path is outside the request directory: " + requested);
         }
+
         return candidate;
     }
 
     /**
-     * Ister_0011: dosya belirtilen yolda var mi?
-     *
-     * Yalnizca varligi degil, okunabilirligi ve gecerli JSON olup
-     * olmadigini da bildirir — cunku bir sonraki adim (Ister_0012)
-     * bu dosyayi okuyacaktir.
+     * Dosya var mi, okunabilir mi, JSON gecerli mi kontrol eder.
      */
     public Map<String, Object> check(String requested) {
         Path path = resolve(requested);
@@ -79,6 +67,7 @@ public class RequestFileService {
         result.put("path", requested);
         result.put("resolvedPath", path.toString());
         result.put("baseDirectory", baseDirectory.toString());
+        result.put("fileType", detectRequestFileType(path).name());
 
         boolean exists = Files.exists(path);
         result.put("exists", exists);
@@ -100,31 +89,31 @@ public class RequestFileService {
         try {
             size = Files.size(path);
         } catch (IOException ignored) {
-            // boyut okunamadi; 0 birakilir
+            // boyut okunamazsa 0 kalir
         }
         result.put("size", size);
 
-        // Icerik gercekten JSON mu? (Ister_0014 ile ayni ruh: format dogrulama)
         boolean validJson = false;
         if (isFile && readable) {
             try {
                 Json.parseObject(readText(path));
+                validateRequestFileName(path);
                 validJson = true;
             } catch (Exception ignored) {
-                // gecersiz JSON; validJson false kalir
+                validJson = false;
             }
         }
+
         result.put("validJson", validJson);
         return result;
     }
 
     /**
-     * Dosyayi okuyup JSON olarak ayristirir (Ister_0012'nin girdisi).
-     *
-     * @throws FileProblem dosya yoksa, okunamiyorsa veya JSON gecersizse
+     * Dosyayi okuyup JSON object olarak dondurur.
      */
     public Map<String, Object> readJson(String requested) {
         Path path = resolve(requested);
+        validateRequestFileName(path);
 
         if (!Files.exists(path)) {
             throw new FileProblem("File not found: " + requested);
@@ -150,11 +139,50 @@ public class RequestFileService {
         }
     }
 
+    /**
+     * Router buradan dosyanin user dosyasi olup olmadigini anlayacak.
+     */
+    public boolean isUserFile(String requested) {
+        return detectRequestFileType(resolve(requested)) == RequestFileType.USER;
+    }
+
+    /**
+     * Router buradan dosyanin database dosyasi olup olmadigini anlayacak.
+     */
+    public boolean isDatabaseFile(String requested) {
+        return detectRequestFileType(resolve(requested)) == RequestFileType.DATABASE;
+    }
+
+    private void validateRequestFileName(Path path) {
+        RequestFileType fileType = detectRequestFileType(path);
+
+        if (fileType == RequestFileType.UNKNOWN) {
+            throw new FileProblem(
+                    "Request file name must start with user_ or database_: "
+                            + path.getFileName()
+            );
+        }
+    }
+
+    private RequestFileType detectRequestFileType(Path path) {
+        String fileName = path.getFileName().toString().toLowerCase(Locale.ROOT);
+
+        if (fileName.startsWith("user_") && fileName.endsWith(".json")) {
+            return RequestFileType.USER;
+        }
+
+        if (fileName.startsWith("database_") && fileName.endsWith(".json")) {
+            return RequestFileType.DATABASE;
+        }
+
+        return RequestFileType.UNKNOWN;
+    }
+
     private static String readText(Path path) throws IOException {
         return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
     }
 
-    /** Taban klasoru yoksa olusturur; basarisiz olursa sessizce gecer. */
+    /** Taban klasoru yoksa olusturur. */
     public void ensureBaseDirectory() {
         try {
             Files.createDirectories(baseDirectory);
@@ -165,11 +193,21 @@ public class RequestFileService {
 
     /** Taban klasor disina cikan yol istekleri. */
     public static class PathNotAllowed extends RuntimeException {
-        public PathNotAllowed(String m) { super(m); }
+        public PathNotAllowed(String m) {
+            super(m);
+        }
     }
 
     /** Dosya bulunamadi / okunamadi / gecersiz JSON. */
     public static class FileProblem extends RuntimeException {
-        public FileProblem(String m) { super(m); }
+        public FileProblem(String m) {
+            super(m);
+        }
+    }
+
+    private enum RequestFileType {
+        USER,
+        DATABASE,
+        UNKNOWN
     }
 }
