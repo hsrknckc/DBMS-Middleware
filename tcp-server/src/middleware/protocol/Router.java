@@ -8,6 +8,7 @@ import java.util.Set;
 
 import jsonparser.Json;
 import middleware.auth.AuthService;
+import middleware.auth.PasswordResetService;
 import middleware.auth.User;
 import middleware.events.Event;
 import middleware.events.EventBus;
@@ -46,11 +47,7 @@ public class Router {
     private final AuditService audit;
     private final BackupService backupService;
     private final RestoreService restoreService;
-
-    /**
-     * Tanimlanmamis alanlarin tipi ilk yazmada ogrenilsin mi?
-     * Acikken frontend disindan gelen yazmalar da korunur.
-     */
+    private final PasswordResetService passwordReset;
     private final boolean autoSchema;
 
     public Router(Store store, EventBus eventBus, AuthService auth,
@@ -71,6 +68,14 @@ public class Router {
         this.auth = auth;
         this.files = files;
         this.audit = audit;
+
+        this.passwordReset =
+                new PasswordResetService(
+                        store,
+                        auth,
+                        audit
+                );
+
         this.autoSchema = autoSchema;
         this.backupService = backupService != null
                 ? backupService : new BackupService(store, new AppConfig());
@@ -89,14 +94,52 @@ public class Router {
             requestId = str(req, "requestId");
 
             String action = str(req, "action");
+
             if (action == null) {
-                return error(requestId, "action field is required");
+                return error(
+                        requestId,
+                        "action field is required"
+                );
             }
 
-            // PROTOKOL.md: her istek kimlik bilgisi tasir.
-            User user = auth.authenticate(str(req, "username"), str(req, "password"));
+            String normalizedAction =
+                action.toUpperCase();
+
+            /*
+             * Password reset'in self-service action'lari
+             * authenticated kullanici gerektirmez.
+             *
+             * Kullanici sifresini unuttugu icin username/password
+             * gondermesini bekleyemeyiz.
+             */
+            if ("REQUEST_PASSWORD_RESET".equals(normalizedAction)) {
+                return requestPasswordReset(
+                        requestId,
+                        req
+                );
+            }
+
+            if ("CONFIRM_PASSWORD_RESET".equals(normalizedAction)) {
+                return confirmPasswordReset(
+                        requestId,
+                        req
+                );
+            }
+
+            /*
+            * Bundan sonraki islemler authenticated request'tir.
+            */
+            User user =
+                    auth.authenticate(
+                            str(req, "username"),
+                            str(req, "password")
+                    );
+
             if (user == null) {
-                return unauthorized(requestId, "Invalid username or password");
+                return unauthorized(
+                        requestId,
+                        "Invalid username or password"
+                );
             }
 
             // Istek istege bagli olarak "name" (kullanicinin gorunen adi) tasir.
@@ -147,6 +190,13 @@ public class Router {
                 case "RESTORE_USER"            -> restoreUser(requestId, user, req);
                 case "DROP_USER"               -> dropUser(requestId, user, req);
                 case "RESET_USER_PASSWORD"     -> resetUserPassword(requestId, user, req);
+                
+                case "APPROVE_PASSWORD_RESET"
+                        -> approvePasswordReset(
+                                requestId,
+                                user,
+                                req
+                        );
 
                 // --- Denetim kayitlari ---
                 case "AUDIT_LOGS"        -> auditLogs(requestId, user, req);
@@ -930,6 +980,204 @@ private String delete(String rid, User user, Map<String, Object> req) {
         return ok(rid, "User permanently deleted", List.of());
     }
 
+
+    /**
+     * Self-service password reset talebi.
+     *
+     * Bu endpoint anonymous'tur.
+     *
+     * Kullanici bulunup bulunmadigi istemciye aciklanmaz.
+     * Account enumeration'i engellemek icin response her zaman
+     * generic tutulur.
+     */
+    private String requestPasswordReset(
+            String rid,
+            Map<String, Object> req
+    ) {
+
+        Map<String, Object> doc =
+                mapOrEmpty(
+                        req.get("document")
+                );
+
+        String email =
+                str(
+                        doc,
+                        "email"
+                );
+
+        /*
+        * requestReset null donse bile response'u degistirmiyoruz.
+        *
+        * Boylece saldirgan:
+        *
+        * "bu email sistemde var"
+        *
+        * bilgisini alamaz.
+        */
+        passwordReset.requestReset(
+                email
+        );
+
+        return ok(
+                rid,
+                "If an account exists for this email, "
+                        + "password reset instructions have been generated.",
+                List.of()
+        );
+    }
+
+
+    /**
+     * Kullanici reset code ile yeni sifresini belirler.
+     *
+     * Anonymous action'dir.
+     */
+    private String confirmPasswordReset(
+            String rid,
+            Map<String, Object> req
+    ) {
+
+        Map<String, Object> doc =
+                mapOrEmpty(
+                        req.get("document")
+                );
+
+        String email =
+                str(
+                        doc,
+                        "email"
+                );
+
+        String resetCode =
+                str(
+                        doc,
+                        "resetCode"
+                );
+
+        String newPassword =
+                str(
+                        doc,
+                        "newPassword"
+                );
+
+        PasswordResetService.ResetResult result =
+                passwordReset.confirmReset(
+                        email,
+                        resetCode,
+                        newPassword
+                );
+
+        return switch (result) {
+
+            case SUCCESS ->
+                    ok(
+                            rid,
+                            "Password reset completed.",
+                            List.of()
+                    );
+
+            case WEAK_PASSWORD ->
+                    error(
+                            rid,
+                            "Password must be at least 8 characters "
+                                    + "and contain uppercase, lowercase "
+                                    + "and numeric characters."
+                    );
+
+            case ADMIN_APPROVAL_REQUIRED ->
+                    error(
+                            rid,
+                            "Password reset is locked and requires "
+                                    + "Super Admin approval."
+                    );
+
+            case EXPIRED, INVALID ->
+                    error(
+                            rid,
+                            "Password reset code is invalid or expired."
+                    );
+        };
+    }
+
+    /**
+     * 3 hatali reset dogrulamasi sonrasi kilitlenen kullaniciya
+     * Super Admin tarafindan yeniden reset izni verilir.
+     *
+     * Eski reset code aktif edilmez.
+     * Yeni reset code uretilir.
+     */
+    private String approvePasswordReset(
+            String rid,
+            User admin,
+            Map<String, Object> req
+    ) {
+
+        requireSuperAdmin(
+                admin
+        );
+
+        String targetId =
+                targetUserId(
+                        req
+                );
+
+        User target =
+                auth.byId(
+                        targetId
+                );
+
+        if (target == null) {
+            throw new Invalid(
+                    "User not found: "
+                            + targetId
+            );
+        }
+
+        String newResetCode =
+                passwordReset.approveReset(
+                        targetId,
+                        admin
+                );
+
+        if (newResetCode == null) {
+            throw new Invalid(
+                    "This user does not have a password reset "
+                            + "waiting for administrator approval."
+            );
+        }
+
+        /*
+        * DEVELOPMENT ONLY.
+        *
+        * Production'da reset code response icinde DONMEMELI.
+        * Email delivery eklenince bu data kaldirilacak.
+        */
+        Map<String, Object> result =
+                new LinkedHashMap<>();
+
+        result.put(
+                "userId",
+                target.id()
+        );
+
+        result.put(
+                "email",
+                target.email()
+        );
+
+        result.put(
+                "resetCode",
+                newResetCode
+        );
+
+        return ok(
+                rid,
+                "Password reset approved.",
+                List.of(result)
+        );
+    }
+
     /** Sifre sifirlar; yeni sifre verilmezse rastgele uretilir ve dondurulur. */
     private String resetUserPassword(String rid, User admin, Map<String, Object> req) {
         requireSuperAdmin(admin);
@@ -940,10 +1188,18 @@ private String delete(String rid, User user, Map<String, Object> req) {
         Map<String, Object> doc = mapOrEmpty(req.get("document"));
         String newPassword = auth.resetPassword(id, str(doc, "password"));
 
-        audit.record("passwordResetRequested", admin.id(), admin.name(),
-                target.id(), target.name(),
-                "Sifre sifirlandi: " + target.email(),
-                Map.of(), Map.of(), false);
+        audit.record(
+                "passwordResetByAdmin", 
+                admin.id(), 
+                admin.name(),
+                target.id(), 
+                target.name(),
+                "Sifre Super Admin tarafindan sifirlandi: " 
+                        + target.email(),
+                Map.of(), 
+                Map.of(), 
+                false
+                );
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", target.id());

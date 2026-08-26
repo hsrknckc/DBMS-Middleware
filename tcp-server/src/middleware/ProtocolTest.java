@@ -435,6 +435,289 @@ check("excessive limit is rejected",
                     + "\"username\":\"testuser@company.com\",\"password\":\"yeniSifre1\"}");
             check("login works with new password", relogin.contains("\"status\":\"OK\""));
 
+            section("Self-service Password Reset");
+            
+            String resetRequest = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr1\","
+                            + "\"action\":\"REQUEST_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\""
+                            + "}"
+                            + "}"
+            );
+
+            check(
+                    "REQUEST_PASSWORD_RESET works without authentication",
+                    resetRequest.contains("\"status\":\"OK\"")
+            );
+
+            check(
+                "password reset request returns generic response",
+                resetRequest.contains(
+                        "If an account exists for this email"
+                )
+            );
+
+            String unknownReset = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr2\","
+                            + "\"action\":\"REQUEST_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"does-not-exist@company.com\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "unknown reset email still returns OK",
+                    unknownReset.contains("\"status\":\"OK\"")
+            );
+            
+            check(
+                    "unknown reset email does not reveal account existence",
+                    !unknownReset.toLowerCase().contains(
+                            "user not found"
+                    )
+            );
+
+            // Not:
+            // Gercek reset code server console'unda gorunecek.
+            // Bu test bolumu once security/escalation davranisini test ediyor.
+            String wrongReset1 = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr3\","
+                            + "\"action\":\"CONFIRM_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\","
+                            + "\"resetCode\":\"WRONG-RESET-CODE-1\","
+                            + "\"newPassword\":\"ResetPassword123\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "first wrong reset code is rejected",
+                    wrongReset1.contains("\"status\":\"ERROR\"")
+            );
+            
+            String wrongReset2 = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr4\","
+                            + "\"action\":\"CONFIRM_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\","
+                            + "\"resetCode\":\"WRONG-RESET-CODE-2\","
+                            + "\"newPassword\":\"ResetPassword123\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "second wrong reset code is rejected",
+                    wrongReset2.contains("\"status\":\"ERROR\"")
+            );
+            
+            String wrongReset3 = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr5\","
+                            + "\"action\":\"CONFIRM_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\","
+                            + "\"resetCode\":\"WRONG-RESET-CODE-3\","
+                            + "\"newPassword\":\"ResetPassword123\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "third wrong reset code requires Super Admin approval",
+                    wrongReset3.contains(
+                            "requires Super Admin approval"
+                    )
+            );
+            
+            // ------------------------------------------------------------
+            // 4. Super Admin approval
+            // ------------------------------------------------------------
+            
+            String approveReset = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr6\","
+                            + "\"action\":\"APPROVE_PASSWORD_RESET\","
+                            + admin()
+                            + ",\"filter\":{"
+                            + "\"id\":\"" + newUserId + "\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "Super Admin can approve locked password reset",
+                    approveReset.contains("\"status\":\"OK\"")
+            );
+            
+            check(
+                    "development approval returns a new reset code",
+                    approveReset.contains("\"resetCode\":\"")
+            );
+            
+            // ------------------------------------------------------------
+            // 5. Extract new reset code from approval response
+            // ------------------------------------------------------------
+            
+            String approvedResetCode =
+                    extract(
+                            approveReset,
+                            "resetCode"
+                    );
+            
+            check(
+                    "approved reset response contains usable reset code",
+                    approvedResetCode != null
+                            && !approvedResetCode.isBlank()
+            );
+            
+            // ------------------------------------------------------------
+            // 6. Confirm reset with newly approved code
+            // ------------------------------------------------------------
+            
+            String confirmReset = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr7\","
+                            + "\"action\":\"CONFIRM_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\","
+                            + "\"resetCode\":\"" + approvedResetCode + "\","
+                            + "\"newPassword\":\"ResetPassword123\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "approved reset code changes password",
+                    confirmReset.contains("\"status\":\"OK\"")
+            );
+            
+            // ------------------------------------------------------------
+            // 7. Login using new password
+            // ------------------------------------------------------------
+            
+            String resetLogin = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr8\","
+                            + "\"action\":\"LOGIN\","
+                            + "\"username\":\"testuser@company.com\","
+                            + "\"password\":\"ResetPassword123\""
+                            + "}"
+            );
+            
+            check(
+                    "login succeeds with self-service reset password",
+                    resetLogin.contains("\"status\":\"OK\"")
+            );
+            
+            // ------------------------------------------------------------
+            // 8. Previous password must no longer work
+            // ------------------------------------------------------------
+            
+            String oldResetLogin = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr9\","
+                            + "\"action\":\"LOGIN\","
+                            + "\"username\":\"testuser@company.com\","
+                            + "\"password\":\"yeniSifre1\""
+                            + "}"
+            );
+            
+            check(
+                    "previous password no longer works after reset",
+                    oldResetLogin.contains("\"status\":\"UNAUTHORIZED\"")
+            );
+            
+            // ------------------------------------------------------------
+            // 9. Used reset code cannot be reused
+            // ------------------------------------------------------------
+            
+            String reusedResetCode = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr10\","
+                            + "\"action\":\"CONFIRM_PASSWORD_RESET\","
+                            + "\"document\":{"
+                            + "\"email\":\"testuser@company.com\","
+                            + "\"resetCode\":\"" + approvedResetCode + "\","
+                            + "\"newPassword\":\"AnotherPassword123\""
+                            + "}"
+                            + "}"
+            );
+            
+            check(
+                    "used reset code cannot be reused",
+                    reusedResetCode.contains("\"status\":\"ERROR\"")
+            );
+            
+            // ------------------------------------------------------------
+            // 10. Audit events should exist
+            // ------------------------------------------------------------
+            
+            String resetAudit = rpc(
+                    out,
+                    in,
+                    "{"
+                            + "\"requestId\":\"pr11\","
+                            + "\"action\":\"AUDIT_LOGS\","
+                            + admin()
+                            + "}"
+            );
+            
+            check(
+                    "audit contains password reset request",
+                    resetAudit.contains(
+                            "passwordResetRequested"
+                    )
+            );
+            
+            check(
+                    "audit contains admin approval requirement",
+                    resetAudit.contains(
+                            "passwordResetAdminApprovalRequired"
+                    )
+            );
+            
+            check(
+                    "audit contains admin approval",
+                    resetAudit.contains(
+                            "passwordResetAdminApproved"
+                    )
+            );
+            
+            check(
+                    "audit contains completed password reset",
+                    resetAudit.contains(
+                            "passwordResetCompleted"
+                    )
+            );
+                       
             String du = rpc(out, in, "{\"requestId\":\"u6\",\"action\":\"DELETE_USER\"," + admin()
                     + ",\"filter\":{\"id\":\"" + newUserId + "\"}}");
             check("DELETE_USER marks as deleted", du.contains("\"isDeleted\":true"));
@@ -457,6 +740,7 @@ check("excessive limit is rejected",
             String dropU = rpc(out, in, "{\"requestId\":\"u11\",\"action\":\"DROP_USER\"," + admin()
                     + ",\"filter\":{\"id\":\"" + newUserId + "\"}}");
             check("DROP_USER removes permanently", dropU.contains("\"status\":\"OK\""));
+            
 
             section("Audit log");
             String logs = rpc(out, in, "{\"requestId\":\"a1\",\"action\":\"AUDIT_LOGS\"," + admin() + "}");

@@ -1,0 +1,1 @@
+{"version":1,"snapshotId":"20260826_162214_081","snapshotTag":"20260826_162214_081","createdAt":"2026-08-26T16:22:14.081872","database":"bson_dr_test","success":true,"totalRecords":8,"maxChunkBytes":104857600,"collections":[{"name":"kayitlar","recordCount":8,"files":["bson_dr_test_kayitlar.bson"]}]}
