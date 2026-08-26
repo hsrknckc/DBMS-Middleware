@@ -1,0 +1,1 @@
+{"database":"protokol_test_db","department":"Test","description":"protokol testi","collections":[{  "name":"test_kayitlar",  "fields":[{"name":"baslik","type":"string"},             {"name":"adet","type":"int"}],  "records":[{"baslik":"bir","adet":1},              {"baslik":"iki","adet":2}]}]}
