@@ -1815,7 +1815,10 @@ private String delete(String rid, User user, Map<String, Object> req) {
     /** On Yuz panosu icin sistem durumu. */
     private String systemStatus(String rid) {
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("isMongoConnected", store.isHealthy());
+        boolean mongoConnected =
+                store instanceof middleware.storage.MongoStore
+                        && store.isHealthy();
+        status.put("isMongoConnected", mongoConnected);
         status.put("isApiOnline", true);   // bu cevabi uretebiliyorsak ayaktayiz
         status.put("lastBackupAt", null);
         status.put("lastCheckedAt",
