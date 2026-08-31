@@ -163,14 +163,17 @@ public class PasswordResetService {
         );
 
         auditService.record(
-                "passwordResetRequested",
+                "PASSWORD_RESET_REQUESTED",
                 user.id(),
                 user.name(),
                 user.id(),
                 user.name(),
-                "Password reset requested.",
-                null,
-                null,
+                user.name() + " kullanicisi sifre degisikligi talep etti.",
+                Map.of(),
+                Map.of(
+                        "email",
+                        user.email()
+                ),
                 false
         );
 
@@ -327,14 +330,17 @@ public class PasswordResetService {
         );
 
         auditService.record(
-                "passwordResetCompleted",
+                "PASSWORD_RESET_CONFIRMED",
                 user.id(),
                 user.name(),
                 user.id(),
                 user.name(),
-                "Password reset completed.",
-                null,
-                null,
+                user.name() + " kullanicisi sifresini degistirdi.",
+                Map.of(),
+                Map.of(
+                        "email",
+                        user.email()
+                ),
                 false
         );
 
@@ -418,14 +424,17 @@ public class PasswordResetService {
                 );
 
         auditService.record(
-                "passwordResetAdminApproved",
+                "PASSWORD_RESET_APPROVED",
                 approvedBy.id(),
                 approvedBy.name(),
                 target.id(),
                 target.name(),
-                "Password reset approved by Super Admin.",
-                null,
-                null,
+                target.name() + " kullanicisinin sifre degisikligi talebi Super Admin tarafindan onaylandi.",
+                Map.of(),
+                Map.of(
+                        "email",
+                        target.email()
+                ),
                 false
         );
 
@@ -484,16 +493,19 @@ public class PasswordResetService {
             );
 
             auditService.record(
-                    "passwordResetAdminApprovalRequired",
+                    "PASSWORD_RESET_APPROVAL_REQUIRED",
                     user.id(),
                     user.name(),
                     user.id(),
                     user.name(),
-                    "Password reset locked after "
+                    user.name()
+                            + " kullanicisinin sifre degisikligi "
                             + failedAttempts
-                            + " failed verification attempts.",
-                    null,
+                            + " hatali deneme sonrasi Super Admin onayi bekliyor.",
+                    Map.of(),
                     Map.of(
+                            "email",
+                            user.email(),
                             "failedAttempts",
                             failedAttempts
                     ),

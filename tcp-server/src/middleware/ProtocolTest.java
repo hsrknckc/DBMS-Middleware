@@ -693,28 +693,28 @@ check("excessive limit is rejected",
             check(
                     "audit contains password reset request",
                     resetAudit.contains(
-                            "passwordResetRequested"
+                            "PASSWORD_RESET_REQUESTED"
                     )
             );
             
             check(
                     "audit contains admin approval requirement",
                     resetAudit.contains(
-                            "passwordResetAdminApprovalRequired"
+                            "PASSWORD_RESET_APPROVAL_REQUIRED"
                     )
             );
             
             check(
                     "audit contains admin approval",
                     resetAudit.contains(
-                            "passwordResetAdminApproved"
+                            "PASSWORD_RESET_APPROVED"
                     )
             );
             
             check(
                     "audit contains completed password reset",
                     resetAudit.contains(
-                            "passwordResetCompleted"
+                            "PASSWORD_RESET_CONFIRMED"
                     )
             );
                        

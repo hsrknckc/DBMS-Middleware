@@ -1194,7 +1194,7 @@ private String delete(String rid, User user, Map<String, Object> req) {
         String newPassword = auth.resetPassword(id, str(doc, "password"));
 
         audit.record(
-                "passwordResetByAdmin", 
+                "PASSWORD_RESET_BY_ADMIN",
                 admin.id(), 
                 admin.name(),
                 target.id(), 
@@ -1202,7 +1202,10 @@ private String delete(String rid, User user, Map<String, Object> req) {
                 "Sifre Super Admin tarafindan sifirlandi: " 
                         + target.email(),
                 Map.of(), 
-                Map.of(), 
+                Map.of(
+                        "email",
+                        target.email()
+                ),
                 false
                 );
 
